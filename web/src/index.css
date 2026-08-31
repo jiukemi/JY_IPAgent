@@ -1,0 +1,308 @@
+@import "tailwindcss";
+
+/*
+  Studio Light — 参考剪辑台：浅灰底 + 白卡片 + 活力橙
+  暗色主题保留可选，默认以明亮工作室为主。
+*/
+
+:root,
+[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f3f4f6;
+  --panel: #ffffff;
+  --panel-2: #ffffff;
+  --border: #e8eaef;
+  --text: #1f2937;
+  --muted: #6b7280;
+  --accent: #f97316;
+  --accent-2: #fb923c;
+  --accent-contrast: #ffffff;
+  --success: #16a34a;
+  --success-bg: #ecfdf3;
+  --success-border: #86efac;
+  --pink: #ec4899;
+  --select-bg: #fff7ed;
+  --select-border: #f97316;
+  --select-shadow: rgba(249, 115, 22, 0.22);
+  --badge-bg: #fff7ed;
+  --badge-text: #ea580c;
+  --scrollbar: #d1d5db;
+  --warn-border: rgba(245, 158, 11, 0.4);
+  --warn-bg: rgba(255, 251, 235, 0.95);
+  --warn-text: #b45309;
+  --info-border: rgba(249, 115, 22, 0.28);
+  --info-bg: rgba(255, 247, 237, 0.9);
+  --info-text: #c2410c;
+  --card-shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 4px 16px rgba(15, 23, 42, 0.06);
+  --card-radius: 14px;
+  --ring: rgba(249, 115, 22, 0.35);
+}
+
+/* 暗色 · Tokyo Night Storm */
+[data-theme='dark'],
+[data-theme='tokyo-night'] {
+  color-scheme: dark;
+  --bg: #1a1b26;
+  --panel: #24283b;
+  --panel-2: #1f2335;
+  --border: #3b4261;
+  --text: #c0caf5;
+  --muted: #787c99;
+  --accent: #ff9e64;
+  --accent-2: #ffb86c;
+  --accent-contrast: #1a1b26;
+  --success: #9ece6a;
+  --success-bg: rgba(158, 206, 106, 0.12);
+  --success-border: rgba(158, 206, 106, 0.35);
+  --pink: #f7768e;
+  --select-bg: #2a2430;
+  --select-border: #ff9e64;
+  --select-shadow: rgba(255, 158, 100, 0.22);
+  --badge-bg: #2a2430;
+  --badge-text: #ff9e64;
+  --scrollbar: #414868;
+  --warn-border: rgba(224, 175, 104, 0.4);
+  --warn-bg: rgba(224, 175, 104, 0.1);
+  --warn-text: #e0af68;
+  --info-border: rgba(255, 158, 100, 0.35);
+  --info-bg: rgba(255, 158, 100, 0.1);
+  --info-text: #ffb86c;
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --card-radius: 14px;
+  --ring: rgba(255, 158, 100, 0.4);
+}
+
+/* Catppuccin Mocha */
+[data-theme='catppuccin'] {
+  color-scheme: dark;
+  --bg: #1e1e2e;
+  --panel: #313244;
+  --panel-2: #28283a;
+  --border: #45475a;
+  --text: #cdd6f4;
+  --muted: #a6adc8;
+  --accent: #fab387;
+  --accent-2: #f9e2af;
+  --accent-contrast: #1e1e2e;
+  --success: #a6e3a1;
+  --success-bg: rgba(166, 227, 161, 0.12);
+  --success-border: rgba(166, 227, 161, 0.35);
+  --pink: #f5c2e7;
+  --select-bg: #3b3340;
+  --select-border: #fab387;
+  --select-shadow: rgba(250, 179, 135, 0.22);
+  --badge-bg: #3b3340;
+  --badge-text: #fab387;
+  --scrollbar: #585b70;
+  --warn-border: rgba(250, 179, 135, 0.4);
+  --warn-bg: rgba(250, 179, 135, 0.1);
+  --warn-text: #fab387;
+  --info-border: rgba(250, 179, 135, 0.35);
+  --info-bg: rgba(250, 179, 135, 0.1);
+  --info-text: #f9e2af;
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --card-radius: 14px;
+  --ring: rgba(250, 179, 135, 0.4);
+}
+
+/* Nord */
+[data-theme='nord'] {
+  color-scheme: dark;
+  --bg: #2e3440;
+  --panel: #3b4252;
+  --panel-2: #343b49;
+  --border: #4c566a;
+  --text: #eceff4;
+  --muted: #d8dee9;
+  --accent: #d08770;
+  --accent-2: #ebcb8b;
+  --accent-contrast: #2e3440;
+  --success: #a3be8c;
+  --success-bg: rgba(163, 190, 140, 0.12);
+  --success-border: rgba(163, 190, 140, 0.35);
+  --pink: #b48ead;
+  --select-bg: #434c5e;
+  --select-border: #d08770;
+  --select-shadow: rgba(208, 135, 112, 0.22);
+  --badge-bg: #434c5e;
+  --badge-text: #d08770;
+  --scrollbar: #4c566a;
+  --warn-border: rgba(235, 203, 139, 0.4);
+  --warn-bg: rgba(235, 203, 139, 0.1);
+  --warn-text: #ebcb8b;
+  --info-border: rgba(208, 135, 112, 0.35);
+  --info-bg: rgba(208, 135, 112, 0.1);
+  --info-text: #ebcb8b;
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --card-radius: 14px;
+  --ring: rgba(208, 135, 112, 0.4);
+}
+
+/* Dracula */
+[data-theme='dracula'] {
+  color-scheme: dark;
+  --bg: #282a36;
+  --panel: #44475a;
+  --panel-2: #343746;
+  --border: #6272a4;
+  --text: #f8f8f2;
+  --muted: #bd93f9;
+  --accent: #ffb86c;
+  --accent-2: #ff79c6;
+  --accent-contrast: #282a36;
+  --success: #50fa7b;
+  --success-bg: rgba(80, 250, 123, 0.12);
+  --success-border: rgba(80, 250, 123, 0.35);
+  --pink: #ff79c6;
+  --select-bg: #383a4a;
+  --select-border: #ffb86c;
+  --select-shadow: rgba(255, 184, 108, 0.22);
+  --badge-bg: #383a4a;
+  --badge-text: #ffb86c;
+  --scrollbar: #6272a4;
+  --warn-border: rgba(255, 184, 108, 0.4);
+  --warn-bg: rgba(255, 184, 108, 0.1);
+  --warn-text: #ffb86c;
+  --info-border: rgba(255, 184, 108, 0.35);
+  --info-bg: rgba(255, 184, 108, 0.1);
+  --info-text: #f8f8f2;
+  --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --card-radius: 14px;
+  --ring: rgba(255, 184, 108, 0.4);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Segoe UI",
+    system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.2s ease, color 0.2s ease;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%);
+  color: var(--accent-contrast);
+  border: none;
+  box-shadow: 0 2px 8px var(--select-shadow);
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.03);
+}
+
+.ui-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--card-radius);
+  box-shadow: var(--card-shadow);
+}
+
+.ui-input {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+}
+
+.ui-input:focus {
+  outline: none;
+  border-color: var(--select-border);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar);
+  border-radius: 999px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Native fullscreen: show full frame (portrait or landscape), no crop */
+video:fullscreen,
+video:-webkit-full-screen {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+/* Cover editor: glow dash sits ON the input border (same path, no gap) */
+@keyframes cover-glow-dash {
+  to {
+    stroke-dashoffset: -100;
+  }
+}
+
+.cover-field-nudge {
+  position: relative;
+  border-radius: 8px;
+}
+
+.cover-field-nudge.is-active > textarea,
+.cover-field-nudge.is-active > input {
+  /* hide native border so SVG ring is the only edge */
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.cover-field-nudge-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.cover-field-nudge-track,
+.cover-field-nudge-glow {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.cover-field-nudge-track {
+  stroke: rgba(249, 115, 22, 0.55);
+}
+
+.cover-field-nudge-glow {
+  stroke: #fb923c;
+  stroke-dasharray: 16 84;
+  filter: drop-shadow(0 0 2.5px rgba(249, 115, 22, 0.9));
+  animation: cover-glow-dash 2.8s linear infinite;
+}
+
+.cover-field-nudge-hint {
+  margin-top: 0.35rem;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ea580c;
+}
+

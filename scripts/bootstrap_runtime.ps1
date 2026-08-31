@@ -1,0 +1,419 @@
+﻿# Bootstrap runtime: reuse system Python/FFmpeg when present; only download missing pieces.
+# ASCII-only (Windows PowerShell 5.1 may mis-parse UTF-8 without BOM).
+#Requires -Version 5.1
+param(
+  [string]$Root = "",
+  [string]$RuntimeRoot = ""
+)
+$ErrorActionPreference = "Stop"
+$env:PYTHONUNBUFFERED = "1"
+
+if (-not $Root) {
+  $Root = Split-Path -Parent $PSScriptRoot
+}
+if (-not $RuntimeRoot) {
+  $RuntimeRoot = Join-Path $Root "data\runtime"
+}
+
+$VenvDir = Join-Path $RuntimeRoot "venv"
+$VenvPy = Join-Path $VenvDir "Scripts\python.exe"
+$EmbedDir = Join-Path $RuntimeRoot "python"
+$EmbedPy = Join-Path $EmbedDir "python.exe"
+$FfmpegDir = Join-Path $RuntimeRoot "ffmpeg"
+$FfmpegExe = Join-Path $FfmpegDir "ffmpeg.exe"
+$PyMeta = Join-Path $RuntimeRoot "python.json"
+$BootLog = Join-Path $RuntimeRoot "bootstrap.log"
+$PipMirror = "https://mirrors.aliyun.com/pypi/simple/"
+$PipHost = "mirrors.aliyun.com"
+
+New-Item -ItemType Directory -Force -Path $RuntimeRoot | Out-Null
+# Truncate live log so Electron can tail during bootstrap
+"" | Set-Content -Path $BootLog -Encoding UTF8
+
+function Escape-ProcArg([string]$a) {
+  if ($null -eq $a) { return '""' }
+  if ($a -match '[\s",]') {
+    return '"' + ($a -replace '\\', '\\' -replace '"', '\"') + '"'
+  }
+  return $a
+}
+
+function Emit-Line([string]$Msg) {
+  # Dual path: Console (Electron spawn) + file (tail fallback). Flush both.
+  try {
+    [Console]::Out.WriteLine($Msg)
+    [Console]::Out.Flush()
+  } catch { }
+  try {
+    Add-Content -Path $BootLog -Value $Msg -Encoding UTF8 -ErrorAction SilentlyContinue
+  } catch { }
+}
+
+function Write-ProgressLine([int]$Pct, [string]$Label) {
+  Emit-Line (("PROGRESS:{0}:{1}" -f $Pct, $Label))
+}
+
+function Write-Log([string]$Msg) {
+  Emit-Line $Msg
+}
+
+Write-ProgressLine 5 "Prepare runtime folder"
+Write-Log ("==> Root=$Root")
+Write-Log ("==> RuntimeRoot=$RuntimeRoot")
+
+# Seed writable config for packaged app (resources may be read-only)
+$RuntimeCfg = Join-Path $RuntimeRoot "config.yaml"
+if (-not (Test-Path $RuntimeCfg)) {
+  foreach ($cand in @(
+      (Join-Path $Root "config.yaml"),
+      (Join-Path $Root "config.example.yaml")
+    )) {
+    if (Test-Path $cand) {
+      Copy-Item -Force $cand $RuntimeCfg
+      Write-Log "==> seeded $RuntimeCfg"
+      break
+    }
+  }
+}
+
+function Get-File([string[]]$Urls, [string]$Out) {
+  $last = $null
+  foreach ($Url in $Urls) {
+    try {
+      Write-Log "==> download $Url"
+      Invoke-WebRequest -Uri $Url -OutFile $Out -UseBasicParsing -TimeoutSec 600
+      if ((Test-Path $Out) -and ((Get-Item $Out).Length -gt 1000)) { return }
+    } catch {
+      $last = $_.Exception.Message
+      Write-Log "!! download failed: $last"
+    }
+  }
+  throw "download failed after mirrors: $last"
+}
+
+# Run python with live log flush + optional heartbeat PROGRESS lines (splash reads these).
+function Invoke-PyExe {
+  param(
+    [Parameter(Mandatory = $true)][string]$Exe,
+    [Parameter(Mandatory = $true)][string[]]$Args,
+    [int]$HeartbeatPct = 0,
+    [string]$HeartbeatLabel = ""
+  )
+  # Quote args as one string (PS 5.1 array ArgumentList splits on commas).
+  # Use System.Diagnostics.Process — Start-Process -PassThru often leaves ExitCode $null (=0 as [int]).
+  $argStr = ($Args | ForEach-Object { Escape-ProcArg ([string]$_) }) -join ' '
+  Write-Log ("==> run: $Exe $argStr")
+
+  $outFile = Join-Path $RuntimeRoot "_py_out.txt"
+  $errFile = Join-Path $RuntimeRoot "_py_err.txt"
+  Remove-Item $outFile, $errFile -Force -ErrorAction SilentlyContinue
+
+  # /v:on enables !ERRORLEVEL! after the child exits (%ERRORLEVEL% expands too early → always 0)
+  $cmdArgs = "/v:on /c `"`"$Exe`" $argStr >`"$outFile`" 2>`"$errFile`" & exit /b !ERRORLEVEL!`""
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = "cmd.exe"
+  $psi.Arguments = $cmdArgs
+  $psi.WorkingDirectory = $Root
+  $psi.UseShellExecute = $false
+  $psi.CreateNoWindow = $true
+
+  $p = New-Object System.Diagnostics.Process
+  $p.StartInfo = $psi
+  [void]$p.Start()
+  $outPos = 0
+  $errPos = 0
+  $lastBeat = Get-Date
+  $started = Get-Date
+
+  function Emit-NewText([string]$Path, [ref]$Pos) {
+    if (-not (Test-Path $Path)) { return }
+    try {
+      $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+      try {
+        if ($fs.Length -le $Pos.Value) { return }
+        $fs.Seek($Pos.Value, [System.IO.SeekOrigin]::Begin) | Out-Null
+        $sr = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8, $true)
+        $chunk = $sr.ReadToEnd()
+        $Pos.Value = $fs.Length
+        if (-not $chunk) { return }
+        foreach ($line in ($chunk -split "`r?`n")) {
+          if ($line -ne "") { Write-Log $line }
+        }
+      } finally { $fs.Close() }
+    } catch { }
+  }
+
+  while (-not $p.HasExited) {
+    Start-Sleep -Milliseconds 350
+    Emit-NewText $outFile ([ref]$outPos)
+    Emit-NewText $errFile ([ref]$errPos)
+    if ($HeartbeatPct -gt 0 -and ((Get-Date) - $lastBeat).TotalSeconds -ge 5) {
+      $sec = [int]((Get-Date) - $started).TotalSeconds
+      $lbl = if ($HeartbeatLabel) { $HeartbeatLabel } else { "Working" }
+      Write-ProgressLine $HeartbeatPct ("{0} ({1}s)" -f $lbl, $sec)
+      Write-Log ("==> still running: $lbl ${sec}s")
+      $lastBeat = Get-Date
+    }
+  }
+  $null = $p.WaitForExit(60000)
+  Start-Sleep -Milliseconds 150
+  Emit-NewText $outFile ([ref]$outPos)
+  Emit-NewText $errFile ([ref]$errPos)
+  $exitCode = $p.ExitCode
+  if ($null -eq $exitCode) { $exitCode = 1 }
+  Write-Log ("==> exit=$exitCode")
+  return [int]$exitCode
+}
+
+function Write-PyMeta([string]$Exe) {
+  $obj = @{ cmd = $Exe; args = @() }
+  ($obj | ConvertTo-Json -Compress) | Set-Content -Path $PyMeta -Encoding ASCII
+  Write-Log "==> python.json -> $Exe"
+}
+
+function Test-SystemPython {
+  # Returns hashtable @{Exe=...; PrefArgs=string[]} or $null
+  $candidates = @(
+    @{ Exe = "py"; PrefArgs = @("-3.11") },
+    @{ Exe = "py"; PrefArgs = @("-3.12") },
+    @{ Exe = "py"; PrefArgs = @("-3.10") },
+    @{ Exe = "python"; PrefArgs = @() },
+    @{ Exe = "python3"; PrefArgs = @() }
+  )
+  $probePy = Join-Path $RuntimeRoot "_probe_sys_py.py"
+  @'
+import sys
+raise SystemExit(0 if sys.version_info[:2] >= (3, 10) else 1)
+'@ | Set-Content -Path $probePy -Encoding ASCII
+  foreach ($c in $candidates) {
+    $cmd = Get-Command $c.Exe -ErrorAction SilentlyContinue
+    if (-not $cmd) { continue }
+    $exePath = $cmd.Source
+    $argParts = @()
+    $argParts += $c.PrefArgs
+    $argParts += $probePy
+    $argStr = ($argParts | ForEach-Object { Escape-ProcArg ([string]$_) }) -join ' '
+    try {
+      $psi = New-Object System.Diagnostics.ProcessStartInfo
+      $psi.FileName = $exePath
+      $psi.Arguments = $argStr
+      $psi.UseShellExecute = $false
+      $psi.RedirectStandardOutput = $true
+      $psi.RedirectStandardError = $true
+      $psi.CreateNoWindow = $true
+      $p = [System.Diagnostics.Process]::Start($psi)
+      $null = $p.StandardOutput.ReadToEnd()
+      $null = $p.StandardError.ReadToEnd()
+      $p.WaitForExit()
+      if ($p.ExitCode -eq 0) {
+        Write-Log "==> system Python OK: $exePath $($c.PrefArgs -join ' ')"
+        Remove-Item $probePy -Force -ErrorAction SilentlyContinue
+        return @{ Exe = $exePath; PrefArgs = $c.PrefArgs }
+      }
+    } catch {
+      Write-Log "!! probe failed $($c.Exe): $($_.Exception.Message)"
+    }
+  }
+  Remove-Item $probePy -Force -ErrorAction SilentlyContinue
+  return $null
+}
+
+function Ensure-VenvFromSystem($sys) {
+  if (Test-Path $VenvPy) {
+    Write-Log "==> venv already present"
+    return
+  }
+  Write-Log "==> create venv with system Python"
+  $argParts = @()
+  $argParts += $sys.PrefArgs
+  $argParts += @("-m", "venv", $VenvDir)
+  $argStr = ($argParts | ForEach-Object { Escape-ProcArg ([string]$_) }) -join ' '
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $sys.Exe
+  $psi.Arguments = $argStr
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $true
+  $p = [System.Diagnostics.Process]::Start($psi)
+  $null = $p.StandardOutput.ReadToEnd()
+  $err = $p.StandardError.ReadToEnd()
+  $p.WaitForExit()
+  if ($p.ExitCode -ne 0 -or -not (Test-Path $VenvPy)) {
+    throw "venv create failed exit=$($p.ExitCode) $err"
+  }
+}
+
+function Ensure-EmbedPython {
+  if (Test-Path $EmbedPy) {
+    Write-Log "==> portable embed Python already present"
+    return
+  }
+  Write-Log "==> download portable embed Python (no system Python found)"
+  $ver = "3.11.9"
+  $zipName = "python-$ver-embed-amd64.zip"
+  $zipPath = Join-Path $RuntimeRoot $zipName
+  Get-File @(
+    "https://registry.npmmirror.com/-/binary/python/$ver/$zipName",
+    "https://mirrors.huaweicloud.com/python/$ver/$zipName",
+    "https://www.python.org/ftp/python/$ver/$zipName"
+  ) $zipPath
+  if (Test-Path $EmbedDir) { Remove-Item -Recurse -Force $EmbedDir }
+  New-Item -ItemType Directory -Force -Path $EmbedDir | Out-Null
+  Expand-Archive -Path $zipPath -DestinationPath $EmbedDir -Force
+  Remove-Item $zipPath -Force -ErrorAction SilentlyContinue
+
+  $pth = Get-ChildItem $EmbedDir -Filter "python*._pth" | Select-Object -First 1
+  if ($pth) {
+    $lines = Get-Content $pth.FullName
+    $out = @()
+    foreach ($line in $lines) {
+      if ($line -match '^\s*#\s*import site') { $out += "import site" }
+      else { $out += $line }
+    }
+    if ($out -notcontains "import site") { $out += "import site" }
+    $out | Set-Content $pth.FullName -Encoding ASCII
+  }
+
+  $getPip = Join-Path $RuntimeRoot "get-pip.py"
+  Get-File @(
+    "https://mirrors.aliyun.com/pypi/get-pip.py",
+    "https://bootstrap.pypa.io/get-pip.py"
+  ) $getPip
+  $code = Invoke-PyExe -Exe $EmbedPy -Args @($getPip, "-i", $PipMirror, "--trusted-host", $PipHost)
+  if ($code -ne 0) { throw "get-pip failed exit=$code" }
+  Remove-Item $getPip -Force -ErrorAction SilentlyContinue
+}
+
+# --- Resolve Python ---
+Write-ProgressLine 15 "Locate Python"
+$PyExe = $null
+if (Test-Path $VenvPy) {
+  $PyExe = $VenvPy
+  Write-Log "==> use existing venv"
+} else {
+  $sys = Test-SystemPython
+  if ($null -ne $sys) {
+    Write-ProgressLine 25 "Create venv from system Python"
+    Ensure-VenvFromSystem $sys
+    $PyExe = $VenvPy
+  } else {
+    Write-ProgressLine 25 "Download portable Python"
+    Ensure-EmbedPython
+    $PyExe = $EmbedPy
+  }
+}
+
+if (-not $PyExe -or -not (Test-Path $PyExe)) {
+  throw "python missing after bootstrap"
+}
+Write-PyMeta $PyExe
+
+# --- pip / deps ---
+Write-ProgressLine 40 "Check pip"
+$code = Invoke-PyExe -Exe $PyExe -Args @("-m", "pip", "--version")
+if ($code -ne 0) {
+  Write-ProgressLine 45 "Install pip"
+  $getPip = Join-Path $RuntimeRoot "get-pip.py"
+  Get-File @(
+    "https://mirrors.aliyun.com/pypi/get-pip.py",
+    "https://bootstrap.pypa.io/get-pip.py"
+  ) $getPip
+  $code = Invoke-PyExe -Exe $PyExe -Args @($getPip, "-i", $PipMirror, "--trusted-host", $PipHost)
+  if ($code -ne 0) { throw "get-pip failed exit=$code" }
+  Remove-Item $getPip -Force -ErrorAction SilentlyContinue
+}
+
+# Skip pip if core already importable (helper file avoids -c comma quoting bugs)
+Write-ProgressLine 55 "Check core packages"
+$probePy = Join-Path $RuntimeRoot "_probe_core.py"
+@'
+import sys
+mods = ("fastapi", "uvicorn", "yaml", "PIL", "playwright")
+missing = []
+for m in mods:
+    try:
+        __import__(m)
+    except Exception as e:
+        missing.append("%s:%s" % (m, e.__class__.__name__))
+if missing:
+    print("MISSING " + ",".join(missing))
+    sys.exit(1)
+print("OK core imports")
+sys.exit(0)
+'@ | Set-Content -Path $probePy -Encoding ASCII
+$code = Invoke-PyExe -Exe $PyExe -Args @($probePy)
+Remove-Item $probePy -Force -ErrorAction SilentlyContinue
+if ($code -eq 0) {
+  Write-Log "==> core deps already installed, skip pip"
+} else {
+  $coreReq = Join-Path $Root "requirements-desktop-core.txt"
+  if (-not (Test-Path $coreReq)) { $coreReq = Join-Path $Root "requirements.txt" }
+  if (-not (Test-Path $coreReq)) { throw "requirements file missing" }
+  Write-ProgressLine 60 "Install core Python packages"
+  Write-Log ("==> pip install -r $coreReq")
+  $code = Invoke-PyExe -Exe $PyExe -Args @(
+    "-m", "pip", "install", "-r", $coreReq,
+    "-i", $PipMirror, "--trusted-host", $PipHost
+  ) -HeartbeatPct 62 -HeartbeatLabel "Installing core packages"
+  if ($code -ne 0) {
+    throw "pip install core deps failed exit=$code"
+  }
+}
+
+# Playwright browser binary (needed for browser login)
+Write-ProgressLine 72 "Install Playwright Chromium"
+$code = Invoke-PyExe -Exe $PyExe -Args @("-m", "playwright", "install", "chromium") `
+  -HeartbeatPct 74 -HeartbeatLabel "Installing Chromium"
+if ($code -ne 0) { Write-Log "!! playwright chromium install failed (browser login may be unavailable)" }
+
+# Optional rembg - never block startup
+Write-ProgressLine 80 "Optional packages"
+$probeRembg = Join-Path $RuntimeRoot "_probe_rembg.py"
+@'
+import sys
+try:
+    import rembg  # noqa: F401
+    print("OK rembg")
+    sys.exit(0)
+except Exception as e:
+    print("MISSING rembg:%s" % e.__class__.__name__)
+    sys.exit(1)
+'@ | Set-Content -Path $probeRembg -Encoding ASCII
+$code = Invoke-PyExe -Exe $PyExe -Args @($probeRembg)
+Remove-Item $probeRembg -Force -ErrorAction SilentlyContinue
+if ($code -eq 0) {
+  Write-Log "==> rembg already present, skip"
+} else {
+  Write-Log "==> optional: rembg"
+  $code = Invoke-PyExe -Exe $PyExe -Args @(
+    "-m", "pip", "install", "rembg[cpu]>=2.0.50",
+    "-i", $PipMirror, "--trusted-host", $PipHost
+  ) -HeartbeatPct 82 -HeartbeatLabel "Installing rembg"
+  if ($code -ne 0) { Write-Log "!! rembg skipped" }
+}
+
+# --- FFmpeg: prefer PATH ---
+Write-ProgressLine 88 "Check FFmpeg"
+$sysFfmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
+if ($sysFfmpeg) {
+  Write-Log "==> system FFmpeg on PATH, skip download: $($sysFfmpeg.Source)"
+} elseif (Test-Path $FfmpegExe) {
+  Write-Log "==> portable FFmpeg already present"
+} else {
+  Write-Log "==> download FFmpeg"
+  $env:AGENT_RUNTIME_DIR = $RuntimeRoot
+  $probeFf = Join-Path $RuntimeRoot "_probe_ffmpeg.py"
+  @'
+from workflow.runtime_bootstrap import ensure_ffmpeg
+import json
+print(json.dumps(ensure_ffmpeg(True), ensure_ascii=False))
+'@ | Set-Content -Path $probeFf -Encoding ASCII
+  $code = Invoke-PyExe -Exe $PyExe -Args @($probeFf)
+  Remove-Item $probeFf -Force -ErrorAction SilentlyContinue
+  if ($code -ne 0) { Write-Log "!! FFmpeg download failed (non-fatal)" }
+}
+
+Write-ProgressLine 100 "Runtime ready"
+Write-Log "==> bootstrap done"
+Write-Log "Python: $PyExe"

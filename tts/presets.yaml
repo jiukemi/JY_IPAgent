@@ -1,0 +1,288 @@
+# TTS 预设：方言 / 风格前缀（供 IndexTTS 等引擎使用）
+# 方言类请在正文里也使用地道写法（见 UI 提示）
+
+presets:
+  mandarin_female_warm:
+    label: "普通话 · 温柔女声"
+    style_prefix: "(温暖亲切的年轻女声，语速自然，吐字清晰)"
+    dialect: "mandarin"
+
+  mandarin_male_steady:
+    label: "普通话 · 沉稳男声"
+    style_prefix: "(成熟稳重的男声，新闻播报风格，语速适中)"
+    dialect: "mandarin"
+
+  mandarin_female_energetic:
+    label: "普通话 · 活力女声"
+    style_prefix: "(阳光有活力的小姐姐，语速略快，适合短视频口播)"
+    dialect: "mandarin"
+
+  mandarin_male_friendly:
+    label: "普通话 · 亲和男声"
+    style_prefix: "(亲切自然的男声，像朋友聊天，语速自然)"
+    dialect: "mandarin"
+
+dialects:
+  # IndexTTS2 本身不擅长“文字指定方言”；有 Edge 神经音色的走 edge_voice 精确口音。
+  # 无对应 Edge 音色的（四川/上海）仍用 IndexTTS + 强化风格提示，效果仅作近似。
+  cantonese:
+    label: "粤语（准确）"
+    style_prefix: "(地道广东话口语，语气自然轻松，像广州街坊聊天)"
+    hint: "使用 Edge 粤语神经音色。正文请尽量用粤语写法，例如：伙计，唔该一杯冻奶茶少甜。"
+    sample: "伙计，唔该一杯冻奶茶少甜，谢谢晒。"
+    edge_voice: "zh-HK-HiuMaanNeural"
+
+  sichuan:
+    label: "四川话（近似）"
+    style_prefix: "(地道四川话口语，语气接地气，带川渝口音语调，像成都人聊天)"
+    hint: "暂无神经音色，IndexTTS 仅能近似。正文请用四川话表达，例如：老板，整个火锅要微辣嘛。"
+    sample: "老板，整个火锅要微辣嘛，再来两瓶冰粉。"
+
+  northeast:
+    label: "东北话（准确）"
+    style_prefix: "(地道东北话口语，豪爽直率，像东北人唠嗑)"
+    hint: "使用 Edge 东北神经音色。正文请用东北话表达，例如：老铁，这事儿整明白了没？"
+    sample: "老铁，这事儿整明白了没？走，整点烧烤去。"
+    edge_voice: "zh-CN-liaoning-XiaobeiNeural"
+
+  shanghai:
+    label: "上海话（近似）"
+    style_prefix: "(地道上海话口语，市井语气，像上海人聊天)"
+    hint: "暂无神经音色，IndexTTS 仅能近似。正文请用上海话表达。"
+    sample: "侬好，今朝天气老好额，一道出去白相相。"
+
+  taiwan:
+    label: "台湾腔（准确）"
+    style_prefix: "(台湾国语口语，语气自然亲切)"
+    hint: "使用 Edge 台湾神经音色。"
+    sample: "你现在方便吗？我们等等再聊，谢谢。"
+    edge_voice: "zh-TW-HsiaoChenNeural"
+
+  shaanxi:
+    label: "陕西话（准确）"
+    style_prefix: "(地道陕西话口语，语气朴实)"
+    hint: "使用 Edge 陕西神经音色。"
+    sample: "哎，今儿个天气美得很，出去遛达遛达。"
+    edge_voice: "zh-CN-shaanxi-XiaoniNeural"
+
+clone:
+  min_reference_seconds: 5
+  hint: "上传 5 秒以上干净人声，无背景音乐，带自然语气效果更好。"
+  recording_scripts:
+    indextts: "你好，我正在录制自己的声音，用于后续的配音克隆。请保持自然语速和情感，环境安静。"
+    # CosyVoice 零样本克隆：参考音里说的内容必须与这段文案一致
+    cosyvoice: "你好，我正在录制自己的声音，用于后续的配音克隆。请保持自然语速和情感，环境安静。"
+    qwen3_tts: "你好，我正在录制自己的声音，用于后续的配音克隆。请保持自然语速和情感，环境安静。"
+    qwen3_local: "你好，我正在录制自己的声音，用于后续的配音克隆。请保持自然语速和情感，环境安静。"
+
+english_presets:
+  en_female_clear:
+    label: "English · Clear Female"
+    style_prefix: "(Clear American female voice, natural pace, crisp pronunciation)"
+  en_male_warm:
+    label: "English · Warm Male"
+    style_prefix: "(Warm friendly male voice, conversational American English)"
+  en_female_energetic:
+    label: "English · Energetic Female"
+    style_prefix: "(Energetic young female voice, upbeat podcast style)"
+  en_male_narrator:
+    label: "English · Narrator"
+    style_prefix: "(Calm professional narrator, steady pacing, neutral accent)"
+
+# 各 TTS 引擎可用音色目录（切换引擎时 UI 自动替换）
+backend_catalog:
+  indextts:
+    modes: [preset, dialect, clone, custom, upload]
+    preset_keys:
+      - mandarin_female_warm
+      - mandarin_male_steady
+      - mandarin_female_energetic
+      - mandarin_male_friendly
+      - en_female_clear
+      - en_male_warm
+      - en_female_energetic
+      - en_male_narrator
+    dialect_keys:
+      - cantonese
+      - northeast
+      - taiwan
+      - shaanxi
+      - sichuan
+      - shanghai
+
+  cosyvoice:
+    # CosyVoice2-0.5B 无内置 SFT 说话人：仅克隆 + Edge 准确方言（粤/东北/台/陕）
+    # 已移除假预设（温柔女声等）与四川/上海近似
+    modes: [dialect, clone, upload]
+    preset_keys: []
+    dialect_keys:
+      - cantonese
+      - northeast
+      - taiwan
+      - shaanxi
+
+  piper:
+    modes: [preset, upload]
+    preset_keys: []
+    dialect_keys: []
+    voices:
+      zh_CN-huayan-medium:
+        label: "普通话 · 华严（女）"
+        model_file: "zh_CN-huayan-medium.onnx"
+      zh_CN-huayan-x_low:
+        label: "普通话 · 华严（女 · 轻量）"
+        model_file: "zh_CN-huayan-x_low.onnx"
+      zh_CN-huayan-low:
+        label: "普通话 · 华严（女 · 低算力）"
+        model_file: "zh_CN-huayan-low.onnx"
+
+  edge:
+    modes: [preset, upload]
+    preset_keys: []
+    dialect_keys: []
+    voices:
+      zh-CN-XiaoxiaoNeural:
+        label: "普通话 · 晓晓（女 · 温暖）"
+        voice: "zh-CN-XiaoxiaoNeural"
+      zh-CN-XiaoyiNeural:
+        label: "普通话 · 晓伊（女 · 活泼）"
+        voice: "zh-CN-XiaoyiNeural"
+      zh-CN-YunxiNeural:
+        label: "普通话 · 云希（男 · 阳光）"
+        voice: "zh-CN-YunxiNeural"
+      zh-CN-YunjianNeural:
+        label: "普通话 · 云健（男 · 沉稳）"
+        voice: "zh-CN-YunjianNeural"
+      zh-CN-YunxiaNeural:
+        label: "普通话 · 云夏（男 · 少年）"
+        voice: "zh-CN-YunxiaNeural"
+      zh-CN-YunyangNeural:
+        label: "普通话 · 云扬（男 · 新闻）"
+        voice: "zh-CN-YunyangNeural"
+      zh-CN-liaoning-XiaobeiNeural:
+        label: "东北话 · 晓北（女）"
+        voice: "zh-CN-liaoning-XiaobeiNeural"
+      zh-CN-shaanxi-XiaoniNeural:
+        label: "陕西话 · 晓妮（女）"
+        voice: "zh-CN-shaanxi-XiaoniNeural"
+      zh-HK-HiuMaanNeural:
+        label: "粤语 · 晓曼（女）"
+        voice: "zh-HK-HiuMaanNeural"
+      zh-HK-WanLungNeural:
+        label: "粤语 · 云龙（男）"
+        voice: "zh-HK-WanLungNeural"
+      zh-TW-HsiaoChenNeural:
+        label: "台湾腔 · 晓臻（女）"
+        voice: "zh-TW-HsiaoChenNeural"
+      en-US-AriaNeural:
+        label: "English · Aria（女）"
+        voice: "en-US-AriaNeural"
+      en-US-GuyNeural:
+        label: "English · Guy（男）"
+        voice: "en-US-GuyNeural"
+      en-US-JennyNeural:
+        label: "English · Jenny（女）"
+        voice: "en-US-JennyNeural"
+      en-US-ChristopherNeural:
+        label: "English · Christopher（男）"
+        voice: "en-US-ChristopherNeural"
+
+  qwen3_tts:
+    modes: [preset, clone, upload]
+    preset_keys:
+      - mandarin_female_warm
+      - mandarin_male_steady
+      - mandarin_female_energetic
+      - mandarin_male_friendly
+      - en_female_clear
+      - en_male_warm
+      - en_female_energetic
+      - en_male_narrator
+    dialect_keys: []
+    voices:
+      mandarin_female_warm:
+        label: "普通话 · Cherry（女 · 温柔）"
+        voice: "Cherry"
+        language_type: "Chinese"
+      mandarin_male_steady:
+        label: "普通话 · Ethan（男 · 沉稳）"
+        voice: "Ethan"
+        language_type: "Chinese"
+      mandarin_female_energetic:
+        label: "普通话 · Serena（女 · 活力）"
+        voice: "Serena"
+        language_type: "Chinese"
+      mandarin_male_friendly:
+        label: "普通话 · Ryan（男 · 亲和）"
+        voice: "Ryan"
+        language_type: "Chinese"
+      en_female_clear:
+        label: "English · Cherry"
+        voice: "Cherry"
+        language_type: "English"
+      en_male_warm:
+        label: "English · Ryan"
+        voice: "Ryan"
+        language_type: "English"
+      en_female_energetic:
+        label: "English · Serena"
+        voice: "Serena"
+        language_type: "English"
+      en_male_narrator:
+        label: "English · Ethan"
+        voice: "Ethan"
+        language_type: "English"
+
+  # 开源本地 Qwen3-TTS CustomVoice 内置 9 音色（需 scripts/setup/setup_qwen3_local.ps1 下载权重）
+  qwen3_local:
+    modes: [preset, dialect, clone, upload]
+    preset_keys: []
+    dialect_keys: [dylan_beijing, eric_sichuan]
+    voices:
+      vivian:
+        label: "普通话 · Vivian（女 · 明亮）"
+        voice: "Vivian"
+        language_type: "Chinese"
+        category: mandarin
+      serena:
+        label: "普通话 · Serena（女 · 温柔）"
+        voice: "Serena"
+        language_type: "Chinese"
+        category: mandarin
+      uncle_fu:
+        label: "普通话 · Uncle_Fu（男 · 醇厚）"
+        voice: "Uncle_Fu"
+        language_type: "Chinese"
+        category: mandarin
+      dylan_beijing:
+        label: "北京话 · Dylan（男）"
+        voice: "Dylan"
+        language_type: "Chinese"
+        category: dialect
+        hint: "京味男声；正文可用普通话，模型自带北京口音。"
+      eric_sichuan:
+        label: "四川话 · Eric（男）"
+        voice: "Eric"
+        language_type: "Chinese"
+        category: dialect
+        hint: "川渝男声；正文可用普通话，模型自带四川口音。"
+      ryan:
+        label: "English · Ryan（男 · 节奏感）"
+        voice: "Ryan"
+        language_type: "English"
+        category: english
+      aiden:
+        label: "English · Aiden（男 · 阳光）"
+        voice: "Aiden"
+        language_type: "English"
+        category: english
+      ono_anna:
+        label: "日本語 · Ono_Anna（女）"
+        voice: "Ono_Anna"
+        language_type: "Japanese"
+        category: english
+      sohee:
+        label: "한국어 · Sohee（女）"
+        voice: "Sohee"
+        language_type: "Korean"
+        category: english

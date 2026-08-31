@@ -1,0 +1,75 @@
+# Build / installer artifacts
+release/
+desktop/dist-installer/
+desktop/dist-installer-v2/
+desktop/dist/
+desktop/out/
+
+# Python / Node caches
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+web/node_modules/
+desktop/node_modules/
+web/dist/
+web/data/voice_previews/
+web/data/cover_test*.jpg
+web/data/cover_test*.png
+
+# Private local config (may contain API keys) — NEVER commit
+config.yaml
+.env
+.env.*
+!.env.example
+
+# Heavy / generated local engines (install via scripts/setup/setup_*.ps1)
+tools/
+
+# User runtime & media — do not publish
+data/runtime/
+data/browser/
+data/avatars/
+data/heygem_face2face/
+data/bgm/
+data/assets/
+data/voices/
+data/voice_previews/
+data/cover_subject_cache/
+data/competitors/
+data/components/manifest.json
+data/cover_templates/custom.json
+data/job_worker_pending.json
+data/*.wav
+data/*.mp3
+data/*.jpg
+data/*.png
+data/*.jpeg
+data/*.webp
+
+# All local outputs (not only sessions/)
+output/
+
+# Quark / packaging multi-GB zips
+dist/
+*.tar
+*.tar.gz
+
+# Logs & OS junk
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / local IDE (optional local settings)
+.vscode/
+.idea/
+*.swp
+
+# Maintainer-only / WIP docs (keep local; do not publish)
+docs/PROJECT_DECISIONS.md
+docs/heygem-runtime-candidates.md
+docs/packaging-skus.md
+docs/packaging-hosting.md
+docs/offline-bundle.md

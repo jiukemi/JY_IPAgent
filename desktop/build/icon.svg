@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="九易AI智能体">
+  <defs>
+    <linearGradient id="g" x1="20%" y1="10%" x2="80%" y2="90%">
+      <stop offset="0%" stop-color="#fb923c"/>
+      <stop offset="100%" stop-color="#ea580c"/>
+    </linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%">
+      <feGaussianBlur stdDeviation="2.2" result="b"/>
+      <feMerge>
+        <feMergeNode in="b"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <rect width="128" height="128" rx="28" fill="#1a1a1c"/>
+  <g filter="url(#glow)" fill="none" stroke="url(#g)" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M34 78 L52 42 L76 42 L94 78 L76 96 L52 96 Z"/>
+    <path d="M52 42 L64 64 L76 42"/>
+    <path d="M34 78 L64 64 L94 78"/>
+    <path d="M52 96 L64 64 L76 96"/>
+  </g>
+  <g fill="#f97316">
+    <circle cx="52" cy="42" r="5"/>
+    <circle cx="76" cy="42" r="5"/>
+    <circle cx="34" cy="78" r="5"/>
+    <circle cx="94" cy="78" r="5"/>
+    <circle cx="52" cy="96" r="5"/>
+    <circle cx="76" cy="96" r="5"/>
+    <circle cx="64" cy="64" r="6.5" fill="#fb923c"/>
+  </g>
+</svg>

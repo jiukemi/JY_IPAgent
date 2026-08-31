@@ -1,0 +1,63 @@
+{
+  "name": "agent-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "九易AI智能体桌面壳 — 按需下载引擎",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "electron .",
+    "start:full": "electron . --full",
+    "start:light": "electron . --light",
+    "prepare:app": "powershell -NoProfile -ExecutionPolicy Bypass -File ../scripts/prepare_desktop_release.ps1",
+    "dist": "npm run prepare:app && electron-builder --win",
+    "dist:dir": "npm run prepare:app && electron-builder --win --dir"
+  },
+  "devDependencies": {
+    "electron": "^35.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.jiuyi.agent.desktop",
+    "productName": "九易AI智能体",
+    "copyright": "Copyright © 九易AI智能体",
+    "directories": {
+      "output": "dist-installer-v2",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.mjs",
+      "preload.mjs",
+      "splash.html",
+      "splash-preload.mjs",
+      "build/icon.png",
+      "build/icon.ico",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../release/app",
+        "to": "agent"
+      }
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "九易AI智能体-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "九易AI智能体"
+    },
+    "asar": true
+  }
+}

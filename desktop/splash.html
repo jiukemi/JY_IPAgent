@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+    <title>九易AI智能体</title>
+    <style>
+      :root {
+        --ink: #14161c;
+        --panel: rgba(255, 255, 255, 0.06);
+        --text: #f4f1ea;
+        --muted: #9a958c;
+        --accent: #f97316;
+        --accent-soft: rgba(249, 115, 22, 0.22);
+        --line: rgba(255, 255, 255, 0.1);
+        --danger: #fb7185;
+        --ok: #4ade80;
+        --font: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        font-family: var(--font);
+        color: var(--text);
+        background:
+          radial-gradient(120% 90% at 12% -10%, rgba(249, 115, 22, 0.28), transparent 55%),
+          radial-gradient(90% 80% at 100% 0%, rgba(56, 189, 248, 0.12), transparent 50%),
+          linear-gradient(160deg, #1a1c24 0%, #0f1117 55%, #17140f 100%);
+        user-select: none;
+        -webkit-app-region: drag;
+      }
+      .shell {
+        height: 100%;
+        padding: 28px 28px 22px;
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .mark {
+        width: 42px;
+        height: 42px;
+        border-radius: 12px;
+        overflow: hidden;
+        background:
+          linear-gradient(145deg, #fb923c, #ea580c 55%, #c2410c);
+        box-shadow: 0 10px 28px rgba(249, 115, 22, 0.35);
+        display: grid;
+        place-items: center;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        font-size: 15px;
+      }
+      .mark img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+      }
+      .brand h1 {
+        font-size: 18px;
+        font-weight: 650;
+        letter-spacing: 0.04em;
+      }
+      .brand p {
+        margin-top: 3px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .status-card {
+        flex: 1;
+        min-height: 0;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        border-radius: 16px;
+        padding: 16px 16px 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        backdrop-filter: blur(10px);
+      }
+      .label-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 12px;
+      }
+      #phase {
+        font-size: 13px;
+        color: #ffe7d1;
+      }
+      #pct {
+        font-size: 12px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .bar {
+        position: relative;
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.08);
+        overflow: hidden;
+      }
+      .bar > i {
+        display: block;
+        height: 100%;
+        width: 0%;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #fb923c, #f97316 40%, #38bdf8);
+        box-shadow: 0 0 16px rgba(249, 115, 22, 0.45);
+        transition: width 0.45s ease;
+        position: relative;
+        z-index: 1;
+      }
+      .bar::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.28), transparent);
+        transform: translateX(-100%);
+        animation: shimmer 1.4s ease-in-out infinite;
+        pointer-events: none;
+        z-index: 2;
+      }
+      .bar.stopped::after { animation: none; opacity: 0; }
+      .bar.indeterminate > i {
+        width: 36% !important;
+        animation: slide 1.2s ease-in-out infinite;
+      }
+      @keyframes slide {
+        0% { transform: translateX(-120%); }
+        100% { transform: translateX(320%); }
+      }
+      @keyframes shimmer {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+      }
+      .marquee {
+        position: relative;
+        overflow: hidden;
+        height: 22px;
+        border-radius: 8px;
+        border: 1px solid var(--line);
+        background: rgba(0,0,0,0.18);
+        -webkit-app-region: no-drag;
+      }
+      .marquee-track {
+        display: inline-flex;
+        white-space: nowrap;
+        gap: 48px;
+        padding: 3px 0;
+        animation: marquee 22s linear infinite;
+        will-change: transform;
+      }
+      .marquee.paused .marquee-track { animation-play-state: paused; }
+      .marquee-track span {
+        font-size: 11px;
+        color: #c9c3b8;
+        letter-spacing: 0.02em;
+      }
+      .marquee-track .hi { color: #ffd7b0; }
+      @keyframes marquee {
+        0% { transform: translateX(0); }
+        100% { transform: translateX(-50%); }
+      }
+      #log {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        font-size: 11.5px;
+        line-height: 1.55;
+        color: #c9c3b8;
+        font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+        white-space: pre-wrap;
+        word-break: break-all;
+        user-select: text;
+        -webkit-app-region: no-drag;
+        padding-right: 4px;
+      }
+      #log::-webkit-scrollbar { width: 6px; }
+      #log::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.18);
+        border-radius: 999px;
+      }
+      .error-box {
+        display: none;
+        border: 1px solid rgba(251, 113, 133, 0.35);
+        background: rgba(251, 113, 133, 0.08);
+        border-radius: 12px;
+        padding: 12px;
+        gap: 10px;
+        flex-direction: column;
+      }
+      .error-box.show { display: flex; }
+      .error-box h2 {
+        font-size: 13px;
+        color: var(--danger);
+        font-weight: 600;
+      }
+      .success-box {
+        display: none;
+        flex: 1;
+        min-height: 0;
+        border: 1px solid rgba(74, 222, 128, 0.35);
+        background: rgba(74, 222, 128, 0.07);
+        border-radius: 14px;
+        padding: 14px 14px 12px;
+        flex-direction: column;
+        gap: 10px;
+        -webkit-app-region: no-drag;
+      }
+      .success-box.show { display: flex; }
+      .success-box h2 {
+        font-size: 15px;
+        color: var(--ok);
+        font-weight: 650;
+      }
+      .success-box .free {
+        font-size: 12px;
+        line-height: 1.55;
+        color: #ffd7b0;
+        white-space: pre-wrap;
+        user-select: text;
+        border: 1px solid rgba(249, 115, 22, 0.28);
+        background: rgba(249, 115, 22, 0.08);
+        border-radius: 10px;
+        padding: 10px 11px;
+      }
+      .success-box .guide {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        font-size: 12px;
+        line-height: 1.6;
+        color: #d6d3cd;
+        white-space: pre-wrap;
+        user-select: text;
+      }
+      .success-box .guide::-webkit-scrollbar { width: 6px; }
+      .success-box .guide::-webkit-scrollbar-thumb {
+        background: rgba(255,255,255,0.18);
+        border-radius: 999px;
+      }
+      .success-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 2px;
+      }
+      .success-actions button { flex: 1; padding: 10px 12px; font-size: 13px; }
+      #runtimeBox {
+        display: none;
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.04);
+        border-radius: 12px;
+        padding: 10px 12px;
+        font-size: 11.5px;
+        color: #c9c3b8;
+        line-height: 1.5;
+        -webkit-app-region: no-drag;
+        user-select: text;
+      }
+      #runtimeBox.show { display: block; }
+      #runtimeBox strong { color: #ffe7d1; font-weight: 600; }
+      #runtimePath {
+        margin-top: 4px;
+        word-break: break-all;
+        font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+        font-size: 11px;
+        color: #a8a29a;
+      }
+      #errText {
+        max-height: 140px;
+        overflow: auto;
+        font-size: 11.5px;
+        line-height: 1.5;
+        color: #ffd5dc;
+        white-space: pre-wrap;
+        word-break: break-all;
+        user-select: text;
+        -webkit-app-region: no-drag;
+        font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+      }
+      .actions {
+        display: none;
+        gap: 8px;
+        -webkit-app-region: no-drag;
+      }
+      .actions.show { display: flex; }
+      button {
+        border: 1px solid var(--line);
+        background: rgba(255,255,255,0.06);
+        color: var(--text);
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-size: 12px;
+        cursor: pointer;
+        transition: background 0.15s ease, border-color 0.15s ease;
+      }
+      button:hover {
+        background: rgba(255,255,255,0.12);
+        border-color: rgba(255,255,255,0.22);
+      }
+      button.primary {
+        background: var(--accent-soft);
+        border-color: rgba(249, 115, 22, 0.45);
+        color: #ffedd5;
+      }
+      #copyHint {
+        font-size: 11px;
+        color: var(--ok);
+        opacity: 0;
+        transition: opacity 0.2s;
+        align-self: center;
+      }
+      #copyHint.show { opacity: 1; }
+      .foot {
+        font-size: 11px;
+        color: var(--muted);
+        letter-spacing: 0.02em;
+      }
+      .prep-free {
+        display: none;
+        font-size: 11.5px;
+        line-height: 1.5;
+        color: #ffd7b0;
+        white-space: pre-wrap;
+        user-select: text;
+        -webkit-app-region: no-drag;
+        border: 1px solid rgba(249, 115, 22, 0.28);
+        background: rgba(249, 115, 22, 0.08);
+        border-radius: 10px;
+        padding: 9px 11px;
+      }
+      .prep-free.show { display: block; }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <div class="brand">
+        <div class="mark"><img src="build/icon.png" alt="" onerror="this.remove()" /></div>
+        <div>
+          <h1>九易AI智能体</h1>
+          <p id="subtitle">正在准备运行环境…</p>
+        </div>
+      </div>
+
+      <div class="prep-free show" id="prepFree">本应用完全免费，请勿上当受骗。
+获取最新版本：请打开抖音搜索「九易」。</div>
+
+      <div class="status-card" id="progressCard">
+        <div class="label-row">
+          <span id="phase">初始化</span>
+          <span id="pct">0%</span>
+        </div>
+        <div class="bar" id="bar"><i id="fill"></i></div>
+        <div class="marquee" id="marquee">
+          <div class="marquee-track" id="marqueeTrack">
+            <span class="hi" id="marqueeA">正在检测运行时…</span>
+            <span id="marqueeB">正在检测运行时…</span>
+          </div>
+        </div>
+        <div id="log"></div>
+      </div>
+
+      <div class="success-box" id="successBox">
+        <h2 id="successTitle">运行环境已就绪</h2>
+        <div class="free" id="successFree"></div>
+        <div class="guide" id="successGuide"></div>
+        <div class="success-actions">
+          <button class="primary" id="btnEnter">进入软件</button>
+        </div>
+      </div>
+
+      <div id="runtimeBox">
+        <strong>运行时检测</strong>
+        <div id="runtimeMeta"></div>
+        <div id="runtimePath"></div>
+      </div>
+
+      <div class="error-box" id="errorBox">
+        <h2>无法完成启动</h2>
+        <div id="errText"></div>
+        <div class="actions show" id="actions">
+          <button class="primary" id="btnClear">清除运行时并重试</button>
+          <button id="btnQuark">夸克加速：扫描下载</button>
+          <button id="btnQuarkOpen">打开夸克分享</button>
+          <button id="btnDownloads">打开下载文件夹</button>
+          <button id="btnCopy">复制错误信息</button>
+          <button id="btnLog">打开日志目录</button>
+          <button id="btnQuit">退出</button>
+          <span id="copyHint">已复制</span>
+        </div>
+      </div>
+
+      <div class="foot" id="foot">本应用完全免费 · 请勿上当受骗 · 抖音搜索「九易」获取最新版</div>
+    </div>
+    <script>
+      const phaseEl = document.getElementById('phase')
+      const pctEl = document.getElementById('pct')
+      const fillEl = document.getElementById('fill')
+      const barEl = document.getElementById('bar')
+      const logEl = document.getElementById('log')
+      const subtitle = document.getElementById('subtitle')
+      const errorBox = document.getElementById('errorBox')
+      const errText = document.getElementById('errText')
+      const progressCard = document.getElementById('progressCard')
+      const runtimeBox = document.getElementById('runtimeBox')
+      const runtimeMeta = document.getElementById('runtimeMeta')
+      const runtimePath = document.getElementById('runtimePath')
+      const btnClear = document.getElementById('btnClear')
+      const successBox = document.getElementById('successBox')
+      const successFree = document.getElementById('successFree')
+      const successGuide = document.getElementById('successGuide')
+      const successTitle = document.getElementById('successTitle')
+      const foot = document.getElementById('foot')
+      const prepFree = document.getElementById('prepFree')
+      const marquee = document.getElementById('marquee')
+      const marqueeA = document.getElementById('marqueeA')
+      const marqueeB = document.getElementById('marqueeB')
+      let lastPct = 0
+      let displayPct = 0
+      let targetPct = 0
+      let failed = false
+      let succeeded = false
+      let errPayload = ''
+      let clearing = false
+      let lastLine = ''
+      let tickerIdx = 0
+      const tips = [
+        '优先复用本机 Python / FFmpeg，缺失项才会下载',
+        '首次准备可能需要几分钟，请保持联网',
+        '杀毒软件拦截时请放行本程序与 Python',
+        '失败时可一键清除运行时后自动重试',
+        '浏览器登录需要 Playwright Chromium',
+      ]
+
+      function showSuccess(data) {
+        succeeded = true
+        failed = false
+        progressCard.style.display = 'none'
+        prepFree.classList.remove('show')
+        runtimeBox.classList.remove('show')
+        errorBox.classList.remove('show')
+        successBox.classList.add('show')
+        subtitle.textContent = '准备完成'
+        successTitle.textContent = data.title || '运行环境已就绪'
+        successFree.textContent = data.free || ''
+        successGuide.textContent = data.guide || ''
+        foot.textContent = '本应用完全免费 · 请勿上当受骗 · 抖音搜索「九易」获取最新版'
+        setMarquee('启动成功 · 请阅读说明后进入软件')
+        barEl.classList.remove('indeterminate')
+        barEl.classList.add('stopped')
+        marquee.classList.add('paused')
+        paintPct(100)
+      }
+
+      function fmtSize(n) {
+        if (!n || n < 1024) return (n || 0) + ' B'
+        if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+        if (n < 1024 * 1024 * 1024) return (n / (1024 * 1024)).toFixed(1) + ' MB'
+        return (n / (1024 * 1024 * 1024)).toFixed(2) + ' GB'
+      }
+
+      function setMarquee(text) {
+        const t = (text || '').trim() || '正在准备运行环境…'
+        marqueeA.textContent = t
+        marqueeB.textContent = t
+      }
+
+      function renderRuntime(info) {
+        if (!info) return
+        runtimeBox.classList.add('show')
+        const bits = []
+        bits.push(info.exists ? '已存在' : '不存在')
+        if (info.exists) {
+          bits.push(fmtSize(info.sizeBytes))
+          const flags = []
+          if (info.hasVenv) flags.push('venv')
+          if (info.hasEmbed) flags.push('portable-python')
+          if (info.hasConfig) flags.push('config')
+          if (info.hasLog) flags.push('log')
+          if (flags.length) bits.push(flags.join(' · '))
+        }
+        runtimeMeta.textContent = bits.join(' · ')
+        runtimePath.textContent = info.path || ''
+        setMarquee('运行时 ' + bits.join(' · ') + (info.path ? ' · ' + info.path : ''))
+      }
+
+      function paintPct(p) {
+        displayPct = Math.max(0, Math.min(100, p))
+        fillEl.style.width = displayPct + '%'
+        pctEl.textContent = Math.round(displayPct) + '%'
+      }
+
+      function setProgress(pct, label) {
+        if (typeof pct === 'number' && !Number.isNaN(pct)) {
+          lastPct = Math.max(0, Math.min(100, pct))
+          targetPct = Math.max(targetPct, lastPct)
+          barEl.classList.remove('indeterminate')
+        }
+        if (label) {
+          phaseEl.textContent = label
+          setMarquee(label + (lastLine ? ' · ' + lastLine : ''))
+        }
+      }
+
+      function appendLog(line) {
+        if (!line) return
+        const t = String(line).replace(/\r/g, '')
+        if (!t.trim()) return
+        lastLine = t.trim().replace(/^==>\s*/, '').slice(0, 120)
+        logEl.textContent += (logEl.textContent ? '\n' : '') + t.trimEnd()
+        logEl.scrollTop = logEl.scrollHeight
+        // Live logs nudge the soft-crawl ceiling so the bar isn't stuck at 5%
+        if (!failed && targetPct < 90) {
+          targetPct = Math.min(90, targetPct + 0.4)
+        }
+        if (!failed) setMarquee((phaseEl.textContent || '准备中') + ' · ' + lastLine)
+      }
+
+      // Soft crawl so the bar never looks frozen between real PROGRESS events
+      setInterval(() => {
+        if (failed || succeeded) return
+        if (targetPct < 99) {
+          const ceiling = Math.min(targetPct + 8, 96)
+          if (displayPct < ceiling) {
+            displayPct = Math.min(ceiling, displayPct + 0.45)
+            paintPct(displayPct)
+          }
+        } else if (displayPct < targetPct) {
+          paintPct(Math.min(targetPct, displayPct + 1.2))
+        }
+      }, 200)
+
+      setInterval(() => {
+        if (failed || succeeded || lastLine) return
+        tickerIdx = (tickerIdx + 1) % tips.length
+        setMarquee(tips[tickerIdx])
+      }, 4500)
+
+      window.bootSplash?.onUpdate((data) => {
+        if (!data) return
+        if (data.runtime) renderRuntime(data.runtime)
+        if (data.free && !succeeded) {
+          prepFree.textContent = data.free
+          prepFree.classList.add('show')
+        }
+        if (data.foot) foot.textContent = data.foot
+        if (data.mode === 'success') {
+          showSuccess(data)
+          return
+        }
+        if (data.mode === 'indeterminate') {
+          barEl.classList.add('indeterminate')
+          pctEl.textContent = '…'
+          setMarquee(data.label || data.subtitle || '正在启动后端…')
+        }
+        if (data.subtitle) subtitle.textContent = data.subtitle
+        if (typeof data.pct === 'number' || data.label) {
+          setProgress(data.pct, data.label)
+          if (typeof data.pct === 'number') paintPct(Math.max(displayPct, data.pct))
+        }
+        if (data.line) appendLog(data.line)
+        if (data.error) {
+          failed = true
+          errPayload = data.error
+          errText.textContent = data.error
+          errorBox.classList.add('show')
+          successBox.classList.remove('show')
+          subtitle.textContent = '启动失败 — 可一键清除运行时重试'
+          progressCard.style.maxHeight = '120px'
+          barEl.classList.remove('indeterminate')
+          barEl.classList.add('stopped')
+          marquee.classList.add('paused')
+          fillEl.style.width = displayPct + '%'
+          setMarquee('已停止 · 可清除运行时后重试')
+          window.bootSplash?.runtimeInfo?.().then(renderRuntime).catch(() => {})
+        }
+      })
+
+      document.getElementById('btnEnter').onclick = () => {
+        window.bootSplash?.continue?.()
+      }
+      document.getElementById('btnQuark').onclick = async () => {
+        subtitle.textContent = '正在扫描夸克加速包…'
+        setMarquee('扫描下载目录中的 agent-quark-accel*.zip')
+        appendLog('==> quark scan/install')
+        try {
+          const res = await window.bootSplash.quarkInstall()
+          if (res?.ok) {
+            appendLog('==> ' + (res.message || '夸克加速包已安装'))
+            subtitle.textContent = '加速包已就绪，可清除失败状态后重试引导'
+            setMarquee(res.message || '夸克加速包已安装')
+          } else {
+            appendLog('!! ' + (res?.message || '未找到加速包'))
+            errText.textContent = (errPayload ? errPayload + '\n\n' : '') + (res?.message || '未找到')
+            errorBox.classList.add('show')
+          }
+        } catch (e) {
+          appendLog('!! ' + String(e))
+        }
+      }
+      document.getElementById('btnQuarkOpen').onclick = async () => {
+        const res = await window.bootSplash.openQuarkShare()
+        if (!res?.ok) {
+          appendLog('!! ' + (res?.message || '未配置夸克链接'))
+          errText.textContent = res?.message || '未配置夸克链接'
+          errorBox.classList.add('show')
+        } else {
+          appendLog('==> opened quark share')
+        }
+      }
+      document.getElementById('btnDownloads').onclick = () => window.bootSplash?.openDownloads?.()
+      document.getElementById('btnCopy').onclick = async () => {
+        const ok = await window.bootSplash?.copyText(errPayload || errText.textContent || '')
+        const hint = document.getElementById('copyHint')
+        if (ok) {
+          hint.classList.add('show')
+          setTimeout(() => hint.classList.remove('show'), 1600)
+        }
+      }
+      document.getElementById('btnLog').onclick = () => window.bootSplash?.openLogDir()
+      document.getElementById('btnQuit').onclick = () => window.bootSplash?.quit()
+      btnClear.onclick = async () => {
+        if (clearing) return
+        clearing = true
+        btnClear.disabled = true
+        btnClear.textContent = '正在清除…'
+        subtitle.textContent = '正在清除运行时并重启…'
+        setMarquee('正在清除运行时…')
+        try {
+          const res = await window.bootSplash.clearAndRetry()
+          if (!res?.ok) {
+            errText.textContent = (errPayload ? errPayload + '\n\n' : '') + (res?.message || '清除失败')
+            btnClear.disabled = false
+            btnClear.textContent = '清除运行时并重试'
+            clearing = false
+            return
+          }
+          btnClear.textContent = '已清除，正在重启…'
+        } catch (e) {
+          errText.textContent = String(e)
+          btnClear.disabled = false
+          btnClear.textContent = '清除运行时并重试'
+          clearing = false
+        }
+      }
+
+      setMarquee(tips[0])
+      window.bootSplash?.runtimeInfo?.().then(renderRuntime).catch(() => {})
+    </script>
+  </body>
+</html>

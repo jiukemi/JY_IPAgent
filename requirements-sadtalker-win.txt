@@ -1,0 +1,21 @@
+# SadTalker deps compatible with Python 3.11 on Windows (offline bundle build)
+numpy
+face_alignment
+imageio
+imageio-ffmpeg
+librosa
+numba
+resampy
+pydub
+scipy
+kornia
+tqdm
+yacs
+pyyaml
+joblib
+scikit-image==0.21.0
+basicsr
+facexlib
+gfpgan
+av
+safetensors

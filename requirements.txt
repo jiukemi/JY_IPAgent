@@ -1,0 +1,14 @@
+# Core + FastAPI server (server.py)
+PyYAML>=6.0.0
+
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.12
+pydantic>=2.0.0
+
+Pillow>=10.0.0
+# Cover portrait cutout (optional but recommended)
+rembg[cpu]>=2.0.50
+# Browser automation (Douyin CDN / future publish RPA)
+playwright>=1.49.0
+typer>=0.15.1
