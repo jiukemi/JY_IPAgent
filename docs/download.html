@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JY_IPAgent · 下载</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222c;
+      --text: #e8eef4;
+      --muted: #8b9aab;
+      --accent: #3d9cf0;
+      --ok: #3ecf8e;
+      --warn: #e6a23c;
+      --border: #2a3542;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1a3a5c 0%, transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, #1e3d32 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+    }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 48px 20px 64px;
+    }
+    h1 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin: 0 0 8px;
+      letter-spacing: 0.02em;
+    }
+    .tagline {
+      color: var(--muted);
+      margin: 0 0 28px;
+      line-height: 1.6;
+      font-size: 0.95rem;
+    }
+    .card {
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px 22px;
+      margin-bottom: 16px;
+      backdrop-filter: blur(8px);
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 1rem;
+    }
+    .status {
+      font-size: 0.875rem;
+      color: var(--muted);
+      line-height: 1.55;
+      min-height: 1.4em;
+    }
+    .status strong { color: var(--text); }
+    .status .ok { color: var(--ok); }
+    .status .warn { color: var(--warn); }
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+    a.btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      text-decoration: none;
+      border-radius: 10px;
+      padding: 11px 16px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      border: 1px solid transparent;
+      transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+    }
+    a.btn:hover { transform: translateY(-1px); }
+    a.btn-primary {
+      background: var(--accent);
+      color: #041018;
+    }
+    a.btn-primary:hover { background: #5aacf5; }
+    a.btn-ghost {
+      background: transparent;
+      color: var(--text);
+      border-color: var(--border);
+    }
+    a.btn-ghost:hover { border-color: var(--muted); }
+    a.btn[aria-disabled="true"] {
+      opacity: 0.45;
+      pointer-events: none;
+    }
+    .meta {
+      margin-top: 18px;
+      font-size: 0.8rem;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .meta code {
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 0.78rem;
+      color: #c5d4e4;
+    }
+    footer {
+      margin-top: 28px;
+      font-size: 0.75rem;
+      color: var(--muted);
+    }
+    footer a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>JY_IPAgent</h1>
+    <p class="tagline">
+      本地教育口播智能体 · 文案 → 配音 → 数字人/实拍对口型 → 发布合成<br />
+      本页会探测你的网络，优先打开更快可达的镜像（国内多走 Gitee，外网多走 GitHub）。
+    </p>
+
+    <section class="card">
+      <h2>推荐下载 · Release <span id="ver">0.0.9</span></h2>
+      <p class="status" id="probeStatus">正在探测 GitHub / Gitee 连通性…</p>
+      <div class="actions">
+        <a class="btn btn-primary" id="btnPrimary" href="#" aria-disabled="true">检测中…</a>
+        <a class="btn btn-ghost" id="btnAlt" href="#" aria-disabled="true">备用镜像</a>
+      </div>
+      <p class="meta">
+        当前判定：<strong id="chosenLabel">—</strong><br />
+        若自动跳转不符合预期，可手动点上方按钮。源码亦可：
+        <code>git clone</code> 对应仓库地址。
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>仓库地址</h2>
+      <p class="status">
+        GitHub：<a id="linkGhRepo" href="https://github.com/jiukemi/JY_IPAgent" style="color:var(--accent)">jiukemi/JY_IPAgent</a><br />
+        Gitee：<a id="linkGtRepo" href="https://gitee.com/webhwh/JY_IPAgent-" style="color:var(--accent)">webhwh/JY_IPAgent-</a>
+      </p>
+      <p class="meta">
+        安装包（Setup）若已挂到 Release 附件，请在 Release 页下载；
+        口播离线镜像请走应用内夸克加速包（见用户手册）。
+      </p>
+    </section>
+
+    <footer>
+      PolyForm Noncommercial · 禁止商用 ·
+      <a href="./用户手册.md">用户手册</a> ·
+      <a href="../LICENSE">许可</a>
+    </footer>
+  </main>
+
+  <script>
+    (function () {
+      const VERSION = "0.0.9";
+      const MIRRORS = {
+        github: {
+          id: "github",
+          label: "GitHub",
+          release: "https://github.com/jiukemi/JY_IPAgent/releases/tag/v" + VERSION,
+          releases: "https://github.com/jiukemi/JY_IPAgent/releases",
+          // Use a tiny public endpoint; private repos may 404 — treat any HTTP response as reachable.
+          probe: "https://github.com/favicon.ico",
+        },
+        gitee: {
+          id: "gitee",
+          label: "Gitee",
+          release: "https://gitee.com/webhwh/JY_IPAgent-/releases/tag/v" + VERSION,
+          releases: "https://gitee.com/webhwh/JY_IPAgent-/releases",
+          probe: "https://gitee.com/favicon.ico",
+        },
+      };
+
+      const statusEl = document.getElementById("probeStatus");
+      const chosenEl = document.getElementById("chosenLabel");
+      const btnPrimary = document.getElementById("btnPrimary");
+      const btnAlt = document.getElementById("btnAlt");
+      document.getElementById("ver").textContent = VERSION;
+
+      function preferGiteeByLocale() {
+        const lang = (navigator.languages && navigator.languages[0]) || navigator.language || "";
+        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+        return /^zh\b/i.test(lang) || /Shanghai|Chongqing|Urumqi|Hong_Kong|Taipei/i.test(tz);
+      }
+
+      function probe(url, ms) {
+        const ctrl = new AbortController();
+        const t = setTimeout(function () { ctrl.abort(); }, ms);
+        // no-cors: opaque success still means TCP/TLS reached the host
+        return fetch(url, {
+          method: "GET",
+          mode: "no-cors",
+          cache: "no-store",
+          signal: ctrl.signal,
+        }).then(function () {
+          clearTimeout(t);
+          return true;
+        }).catch(function () {
+          clearTimeout(t);
+          return false;
+        });
+      }
+
+      function raceProbe(timeoutMs) {
+        const tasks = [
+          probe(MIRRORS.github.probe, timeoutMs).then(function (ok) { return { id: "github", ok: ok }; }),
+          probe(MIRRORS.gitee.probe, timeoutMs).then(function (ok) { return { id: "gitee", ok: ok }; }),
+        ];
+        return Promise.all(tasks);
+      }
+
+      function pickMirror(results) {
+        const map = {};
+        results.forEach(function (r) { map[r.id] = r.ok; });
+        const gh = !!map.github;
+        const gt = !!map.gitee;
+        if (gh && gt) return preferGiteeByLocale() ? "gitee" : "github";
+        if (gt) return "gitee";
+        if (gh) return "github";
+        // both failed — still prefer locale default for manual click
+        return preferGiteeByLocale() ? "gitee" : "github";
+      }
+
+      function wire(primaryId) {
+        const primary = MIRRORS[primaryId];
+        const alt = MIRRORS[primaryId === "gitee" ? "github" : "gitee"];
+        btnPrimary.href = primary.release;
+        btnPrimary.textContent = "打开 " + primary.label + " Release " + VERSION;
+        btnPrimary.setAttribute("aria-disabled", "false");
+        btnAlt.href = alt.release;
+        btnAlt.textContent = "打开 " + alt.label + "（备用）";
+        btnAlt.setAttribute("aria-disabled", "false");
+        chosenEl.textContent = primary.label;
+      }
+
+      raceProbe(2500).then(function (results) {
+        const map = {};
+        results.forEach(function (r) { map[r.id] = r.ok; });
+        const parts = [];
+        parts.push("GitHub：" + (map.github ? '<span class="ok">可达</span>' : '<span class="warn">超时/不可达</span>'));
+        parts.push("Gitee：" + (map.gitee ? '<span class="ok">可达</span>' : '<span class="warn">超时/不可达</span>'));
+        const chosen = pickMirror(results);
+        statusEl.innerHTML = parts.join(" · ") + " → 推荐 <strong>" + MIRRORS[chosen].label + "</strong>";
+        wire(chosen);
+
+        // Auto-open only when exactly one mirror is reachable
+        if (map.github !== map.gitee) {
+          const only = map.gitee ? "gitee" : "github";
+          statusEl.innerHTML += "（即将打开唯一可达镜像…）";
+          setTimeout(function () {
+            window.location.href = MIRRORS[only].release;
+          }, 900);
+        }
+      }).catch(function () {
+        statusEl.innerHTML = '<span class="warn">探测失败</span>，请手动选择镜像。';
+        wire(preferGiteeByLocale() ? "gitee" : "github");
+      });
+    })();
+  </script>
+</body>
+</html>

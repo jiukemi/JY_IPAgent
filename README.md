@@ -4,6 +4,8 @@
 
 产品说明见 **[docs/用户手册.md](docs/用户手册.md)**。本文面向**开发者 / 二次集成**：架构、技术栈、目录职责与如何跑起来。
 
+**下载 Release（自动选 GitHub / Gitee）**：[docs/download.html](docs/download.html)
+
 开源名：**JY_IPAgent** · 桌面安装包品牌名：「九易AI智能体」。
 
 ---
@@ -191,6 +193,7 @@ JY_IPAgent/
 │
 ├── docs/
 │   ├── 用户手册.md
+│   ├── download.html         # Release 下载页（按网络选 GitHub / Gitee）
 │   ├── quark-accel-packs.md
 │   └── THIRD_PARTY_NOTICES.md
 │
