@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "components": [
+    {
+      "id": "heygem-runtime",
+      "name": "口播引擎（便携运行时）",
+      "kind": "avatar_engine",
+      "required_for": ["avatar_heygem"],
+      "approx_size_gb": 8,
+      "note": "给安装包用户按需下载用。在 mirrors 中配置对象存储/CDN 的 zip URL 与 sha256；未配置则显示「运行时包未提供」。开发机请用 scripts/setup/setup_heygem.ps1 或 Docker。",
+      "mirrors": [
+        {
+          "label": "示例（请替换为真实 OSS/CDN 地址）",
+          "url": "",
+          "sha256": ""
+        }
+      ]
+    },
+    {
+      "id": "indextts-model",
+      "name": "IndexTTS2 模型权重",
+      "kind": "tts_model",
+      "required_for": ["tts_indextts"],
+      "approx_size_gb": 4,
+      "note": "与「本机环境 · GPU 与模型」能力重叠；组件下载接通前请用上方本机安装。",
+      "mirrors": []
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "comment": "夸克网盘加速包清单。软件扫描下载目录时按 bundle_id + sha256 识别。",
+  "bundle_id": "agent-quark-accel",
+  "bundle_name": "九易AI智能体-夸克加速包",
+  "pack_id": "example-demo",
+  "pack_kind": "universal",
+  "gpu_family": "any",
+  "channel": "quark",
+  "min_app_version": "0.1.0",
+  "parts": [
+    {
+      "id": "demo_marker",
+      "file": "payload/READY.txt",
+      "optional": false,
+      "install_as": "accel/READY.txt",
+      "note": "演示用；正式包见 docs/quark-accel-packs.md"
+    }
+  ],
+  "quark_share_url": "",
+  "post_install_hint": "",
+  "notes": [
+    "pack_kind=universal → gpu_family 填 any；与显卡无关",
+    "pack_kind=gpu → gpu_family 必须是 general 或 rtx50（对应不同 HeyGem Docker 镜像）",
+    "用户未装夸克客户端也可：浏览器打开分享页下载到「下载」文件夹即可被扫描"
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "comment": "夸克网盘加速包目录。运营方填 share_url；软件按本机显卡推荐对应包。同一文件夹分享可共用一条 URL + 提取码。",
+  "share_root_url": "https://pan.quark.cn/s/61733feb5559",
+  "share_extract_code": "fcAT",
+  "quark_portal_note": "打开夸克分享（提取码 fcAT）→ 按本机推荐下载对应 zip（通用显卡 / RTX50 勿混）→ 保存到「下载」文件夹 → 回到本页点「扫描安装」，或拖入 zip / 填写本地路径。",
+  "packs": [
+    {
+      "id": "universal-ffmpeg",
+      "name": "通用 · 便携 FFmpeg",
+      "pack_kind": "universal",
+      "gpu_family": "any",
+      "approx_size_gb": 0.2,
+      "required": false,
+      "share_url": "",
+      "zip_name": "九易AI-加速包-通用-ffmpeg.zip",
+      "note": "与显卡无关。本机已有 ffmpeg 时可跳过。"
+    },
+    {
+      "id": "universal-indextts-weights",
+      "name": "通用 · IndexTTS2 模型权重",
+      "pack_kind": "universal",
+      "gpu_family": "any",
+      "approx_size_gb": 4,
+      "required": false,
+      "share_url": "",
+      "zip_name": "九易AI-加速包-通用-IndexTTS权重.zip",
+      "note": "权重文件通用；推理仍需本机 NVIDIA。无外网时用此包代替 HuggingFace。"
+    },
+    {
+      "id": "heygem-docker-general",
+      "name": "口播引擎 · 通用显卡（Docker 镜像）",
+      "pack_kind": "gpu",
+      "gpu_family": "general",
+      "approx_size_gb": 4.6,
+      "required": true,
+      "share_url": "https://pan.quark.cn/s/61733feb5559",
+      "zip_name": "九易AI-加速包-口播-通用显卡.zip",
+      "docker_image": "guiji2025/duix.avatar",
+      "note": "非 RTX 50 系请下这个。夸克同一目录；提取码 fcAT。装完走口播安装向导。RTX 50 用户勿下。"
+    },
+    {
+      "id": "heygem-docker-rtx50",
+      "name": "口播引擎 · RTX 50 系（Docker 镜像）",
+      "pack_kind": "gpu",
+      "gpu_family": "rtx50",
+      "approx_size_gb": 6.7,
+      "required": true,
+      "share_url": "https://pan.quark.cn/s/61733feb5559",
+      "zip_name": "九易AI-加速包-口播-RTX50系.zip",
+      "docker_image": "guiji2025/duix.avatar-5090",
+      "note": "仅 RTX 5060/5070/5080/5090 等 50 系。夸克同一目录；提取码 fcAT。与通用包勿混用。"
+    }
+  ]
+}
+
