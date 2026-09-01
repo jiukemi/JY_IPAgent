@@ -121,7 +121,7 @@
     <h1>JY_IPAgent</h1>
     <p class="tagline">
       本地教育口播智能体 · 文案 → 配音 → 数字人/实拍对口型 → 发布合成<br />
-      本页会探测网络，点下载即拉 zip（国内优先 Gitee，外网优先 GitHub），不再跳进仓库页面。
+      本页会探测网络，点按钮再下载（国内优先 Gitee，外网优先 GitHub），不自动跳转仓库页。
     </p>
 
     <section class="card">
@@ -271,10 +271,6 @@
         const chosen = pickMirror(map);
         statusEl.innerHTML = parts.join(" · ") + " → 使用 <strong>" + MIRRORS[chosen].label + "</strong>";
         wire(chosen);
-
-        // 探测完成后直接开始下载（用户打开本页即下）
-        statusEl.innerHTML += "（已开始下载…）";
-        startDownload(downloadUrl(MIRRORS[chosen]));
       }).catch(function () {
         statusEl.innerHTML = '<span class="warn">探测失败</span>，请手动点下载。';
         wire(preferGiteeByLocale() ? "gitee" : "github");
