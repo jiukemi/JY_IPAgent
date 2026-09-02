@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import http from 'node:http'
+import { downloadAndLaunchInstaller, openReleasePage } from './updater.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -395,6 +396,33 @@ function registerSplashIpc() {
     setTimeout(() => relaunchApp(), 400)
     return { ...result, relaunching: true }
   })
+  ipcMain.handle('desktop:app-version', () => {
+    try {
+      return { version: app.getVersion() }
+    } catch {
+      return { version: '0.0.0' }
+    }
+  })
+  ipcMain.handle('desktop:download-update', async (event, release) => {
+    const sender = event.sender
+    const sendProg = (pct) => {
+      try {
+        if (!sender.isDestroyed()) sender.send('desktop:update-progress', { pct })
+      } catch {
+        /* ignore */
+      }
+    }
+    try {
+      const result = await downloadAndLaunchInstaller(release || {}, sendProg)
+      return { ok: true, ...result }
+    } catch (e) {
+      return { ok: false, message: e instanceof Error ? e.message : String(e) }
+    }
+  })
+  ipcMain.handle('desktop:open-release-page', (_e, url) => {
+    openReleasePage(url)
+    return { ok: true }
+  })
 }
 
 function showBootError(msg) {
@@ -623,13 +651,18 @@ function startBackend() {
     const rt = runtimeDir()
     const ffmpegBin = path.join(rt, 'ffmpeg')
     const pathEnv = [ffmpegBin, process.env.PATH || ''].filter(Boolean).join(path.delimiter)
+    // Packaged: writable runtime config. Dev: prefer project config.yaml so CDN/ASR/浏览器设置一致。
+    const projectCfg = path.join(ROOT, 'config.yaml')
+    const runtimeCfg = path.join(rt, 'config.yaml')
+    const configPath =
+      !app.isPackaged && fs.existsSync(projectCfg) ? projectCfg : runtimeCfg
     const env = {
       ...process.env,
       PATH: pathEnv,
       PYTHONPATH: [ROOT, process.env.PYTHONPATH || ''].filter(Boolean).join(path.delimiter),
       AGENT_EDITION: edition(),
       AGENT_RUNTIME_DIR: rt,
-      AGENT_CONFIG: path.join(rt, 'config.yaml'),
+      AGENT_CONFIG: configPath,
       PYTHONUTF8: '1',
       NO_PROXY: '127.0.0.1,localhost,::1',
     }

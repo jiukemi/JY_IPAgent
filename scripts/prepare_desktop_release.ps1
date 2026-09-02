@@ -35,7 +35,9 @@ $files = @(
   "requirements.txt",
   "requirements-desktop-core.txt",
   "config.example.yaml",
-  "start.bat"
+  "start.bat",
+  "VERSION",
+  "LICENSE"
 )
 foreach ($f in $files) { Copy-Tree $f }
 

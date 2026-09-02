@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import avatar, browser, competitors, config, cover, files, funasr, jobs, publish, script, sessions, setup, system, tts, tts_worker
+from api.routes import avatar, browser, competitors, config, cover, files, funasr, jobs, publish, script, sessions, setup, system, tts, tts_worker, updates
 from api.routes import assets as assets_routes
 from api.routes import components as components_routes
 
@@ -46,9 +46,11 @@ def create_app() -> FastAPI:
     app.include_router(tts_worker.router)
     app.include_router(files.router)
     app.include_router(components_routes.router)
+    app.include_router(updates.router)
 
     @app.get("/api/health")
     def health() -> dict:
+        from api.routes.updates import read_app_version
         from workflow.edition import edition_payload
 
         ui_mtime = None
@@ -59,6 +61,7 @@ def create_app() -> FastAPI:
             "ok": True,
             "ui": WEB_DIST.exists(),
             "ui_build": ui_mtime,
+            "version": read_app_version(),
             **edition_payload(),
         }
 

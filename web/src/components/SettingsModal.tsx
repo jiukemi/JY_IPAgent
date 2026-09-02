@@ -22,6 +22,7 @@ type Props = {
   onSaved: () => void
   focusSection?: 'script' | 'tts' | 'avatar' | 'publish' | 'env'
   configVersion?: number
+  onCheckUpdates?: () => void
 }
 
 const MODES = [
@@ -29,7 +30,14 @@ const MODES = [
   { value: 'cloud', label: '云端' },
 ]
 
-export function SettingsModal({ open, onClose, onSaved, focusSection, configVersion = 0 }: Props) {
+export function SettingsModal({
+  open,
+  onClose,
+  onSaved,
+  focusSection,
+  configVersion = 0,
+  onCheckUpdates,
+}: Props) {
   const [settings, setSettings] = useState<SettingsPayload | null>(null)
   const [engines, setEngines] = useState<
     Record<
@@ -606,6 +614,15 @@ export function SettingsModal({ open, onClose, onSaved, focusSection, configVers
                     {FEEDBACK_EMAIL}
                   </a>
                 </p>
+                {onCheckUpdates && (
+                  <button
+                    type="button"
+                    onClick={onCheckUpdates}
+                    className="mt-1 rounded-lg border border-[var(--border)] px-2.5 py-1 text-[11px] font-medium text-[var(--accent)] hover:bg-[var(--bg)]"
+                  >
+                    检查更新
+                  </button>
+                )}
               </div>
             </div>
             <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">

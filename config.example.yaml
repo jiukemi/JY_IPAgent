@@ -53,7 +53,7 @@ script:
     # 浏览器登录态（绕开抖音风控；需 pip install playwright && playwright install chromium）
     browser:
       user_data_dir: "data/browser/douyin"
-      channel: ""   # 可选 chrome — 使用本机 Chrome
+      channel: "chrome"   # 本机 Chrome；空则用 Playwright Chromium（抖音易白屏）
     cdn:
       # 协议：none | cdn_form_key_url | cdn_form_key_url_times | cdn_agg_video | cdn_agg_profile | cdn_json_url
       provider: "none"

@@ -63,7 +63,29 @@ export type CompetitorItem = {
   platform: string
 }
 
+export type UpdateRelease = {
+  source: string
+  version: string
+  tag: string
+  name: string
+  download_url: string
+  html_url: string
+  size: number
+  notes: string
+}
+
+export type UpdateCheckResult = {
+  ok: boolean
+  current_version: string
+  update_available: boolean
+  latest: UpdateRelease | null
+  mirrors: UpdateRelease[]
+}
+
 export const api = {
+  checkUpdates: () => request<UpdateCheckResult>('/api/updates/check'),
+  appVersion: () => request<{ version: string }>('/api/updates/version'),
+
   browserStatus: (platform?: string) =>
     request<{
       ready: boolean
@@ -236,11 +258,22 @@ export const api = {
     fd.append('share_url', shareUrl)
     if (file) fd.append('media', file)
     return fetch('/api/script/extract_stream', { method: 'POST', body: fd }).then(async (resp) => {
+      if (!resp.ok) {
+        let detail = resp.statusText
+        try {
+          const body = await resp.json()
+          detail = body.detail || JSON.stringify(body)
+        } catch {
+          /* ignore */
+        }
+        throw new Error(detail || `提取失败 HTTP ${resp.status}`)
+      }
       const reader = resp.body?.getReader()
       if (!reader) throw new Error('no stream body')
       const decoder = new TextDecoder()
       let buf = ''
       let result = { log: '', data: {} as Record<string, unknown> }
+      let sawDone = false
       for (;;) {
         const { done, value } = await reader.read()
         if (done) break
@@ -249,17 +282,25 @@ export const api = {
         buf = lines.pop() || ''
         for (const line of lines) {
           if (!line.startsWith('data: ')) continue
+          let ev: { type?: string; pct?: number; desc?: string; data?: Record<string, unknown>; message?: string }
           try {
-            const ev = JSON.parse(line.slice(6))
-            if (ev.type === 'progress') onProgress(ev.pct, ev.desc)
-            else if (ev.type === 'done') result = { log: ev.data?.log || '', data: ev.data || {} }
-            else if (ev.type === 'error') throw new Error(ev.message)
-            else if (ev.type === 'end') return result
+            ev = JSON.parse(line.slice(6))
           } catch {
             // ignore parse errors on partial lines
+            continue
+          }
+          if (ev.type === 'progress') onProgress(Number(ev.pct) || 0, ev.desc || '')
+          else if (ev.type === 'done') {
+            sawDone = true
+            result = { log: (ev.data?.log as string) || '', data: ev.data || {} }
+          } else if (ev.type === 'error') throw new Error(ev.message || '提取失败')
+          else if (ev.type === 'end') {
+            if (!sawDone && !result.log) throw new Error('提取未返回结果，请重试或查看后端日志')
+            return result
           }
         }
       }
+      if (!sawDone && !result.log) throw new Error('提取中断：未收到完成事件')
       return result
     })
   },

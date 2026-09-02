@@ -13,8 +13,9 @@ type SlotProps = {
 }
 
 export function PhonePreviewSlot({ label, note, aspect = '9:16', onExpand, children }: SlotProps) {
+  // 预览框默认保持 9:16 手机比例；横屏素材在框内 object-contain，不把外框改成 16:9。
   const landscape = aspect === '16:9'
-  const frameClass = `relative block w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-[#141820] shadow-lg ${
+  const frameClass = `relative block w-full overflow-hidden rounded-2xl border border-[var(--border)] bg-black shadow-lg ${
     landscape ? 'aspect-video' : 'aspect-[9/16]'
   }`
 

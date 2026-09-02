@@ -165,56 +165,61 @@ def resolve_share_cdn(
         video_url = share_url
         logs.append("[①-A CDN] 直链 mp4，跳过解析接口")
         _emit(on_progress, 0.15, "直链视频…")
-    elif provider == "none":
-        used_provider = "none"
-        logs.append("[①-A CDN] 已跳过（未配置 CDN Key）")
-        _emit(on_progress, 0.12, "跳过 CDN 视频提取…")
     else:
-        # Only the configured provider (+ optional explicit fallback). No silent mixed backends.
-        providers: list[str] = [provider]
+        # Configured provider (+ optional fallback). provider=none still may try fallback
+        # (e.g. browser_share) so local mode can fetch videos without a CDN API Key.
+        providers: list[str] = []
+        if provider and provider != "none":
+            providers.append(provider)
         fb_name = (cdn.get("fallback_provider") or "").strip().lower()
         if fb_name and fb_name not in providers and fb_name != "none":
-            if fb_name != "cdn_form_key_url" or (cdn.get("api_key") or "").strip():
+            # browser_share 不依赖 api_key；其它带 Key 的 fallback 才要求已配置
+            if fb_name == "browser_share" or (cdn.get("api_key") or "").strip():
                 providers.append(fb_name)
 
-        parsed: dict = {}
-        last_err: Exception | None = None
-        used_provider = provider
-        for idx, p in enumerate(providers):
-            try:
-                _emit(on_progress, 0.08 + idx * 0.04, f"①-A 解析 CDN（{p}）…")
-                parsed = call_cdn_provider(
-                    p,
-                    api_url=(cdn.get("api_url") or "").strip() if p == provider else "",
-                    api_key=(cdn.get("api_key") or "").strip(),
-                    share_url=share_url,
-                    extra={**(cdn.get("extra") or {}), "_cfg": cfg},
-                    headers=_parse_headers(
-                        cdn.get("api_key", ""), cloud.get("parse_api_header", "Authorization")
-                    ),
-                    timeout=_request_timeout(cfg),
-                )
-                used_provider = p
-                if p != provider:
-                    logs.append(f"[①-A CDN] 主接口 {provider} 失败，已切换 {p}")
-                break
-            except Exception as exc:
-                last_err = exc
-                logs.append(f"[①-A CDN] {p} 失败: {exc}")
+        if not providers:
+            used_provider = "none"
+            logs.append("[①-A CDN] 已跳过（未配置 CDN / 浏览器回退）")
+            _emit(on_progress, 0.12, "跳过 CDN 视频提取…")
         else:
-            last_msg = str(last_err) if last_err else "未知错误"
-            raise RuntimeError(
-                f"CDN 视频提取失败（已试: {', '.join(providers)}）\n"
-                f"最后错误: {last_msg}\n\n"
-                "可行方案：\n"
-                "1. 检查设置里 CDN 的 API Key / 接口地址\n"
-                "2. 清空 CDN Key 跳过视频提取，仅用 ASR 提文案\n"
-                "3. 上传对标 mp4 后直接提取口播"
-            ) from last_err
+            parsed: dict = {}
+            last_err: Exception | None = None
+            used_provider = providers[0]
+            for idx, p in enumerate(providers):
+                try:
+                    _emit(on_progress, 0.08 + idx * 0.04, f"①-A 解析 CDN（{p}）…")
+                    parsed = call_cdn_provider(
+                        p,
+                        api_url=(cdn.get("api_url") or "").strip() if p == provider else "",
+                        api_key=(cdn.get("api_key") or "").strip(),
+                        share_url=share_url,
+                        extra={**(cdn.get("extra") or {}), "_cfg": cfg},
+                        headers=_parse_headers(
+                            cdn.get("api_key", ""), cloud.get("parse_api_header", "Authorization")
+                        ),
+                        timeout=_request_timeout(cfg),
+                    )
+                    used_provider = p
+                    if provider and p != provider and provider != "none":
+                        logs.append(f"[①-A CDN] 主接口 {provider} 失败，已切换 {p}")
+                    break
+                except Exception as exc:
+                    last_err = exc
+                    logs.append(f"[①-A CDN] {p} 失败: {exc}")
+            else:
+                last_msg = str(last_err) if last_err else "未知错误"
+                raise RuntimeError(
+                    f"CDN 视频提取失败（已试: {', '.join(providers)}）\n"
+                    f"最后错误: {last_msg}\n\n"
+                    "可行方案：\n"
+                    "1. 检查设置里 CDN 的 API Key / 接口地址\n"
+                    "2. 先「浏览器登录」抖音后再试（browser_share）\n"
+                    "3. 上传对标 mp4 后直接提取口播"
+                ) from last_err
 
-        video_url = parsed.get("video_url") or ""
-        title = parsed.get("title") or ""
-        logs.append(f"[①-A CDN] 完成 · {used_provider} · 直链={'有' if video_url else '无'}")
+            video_url = parsed.get("video_url") or ""
+            title = parsed.get("title") or ""
+            logs.append(f"[①-A CDN] 完成 · {used_provider} · 直链={'有' if video_url else '无'}")
 
     if video_url and download_video and cloud.get("download_cdn", True) is not False:
         dest = work_dir / "reference_from_cdn.mp4"

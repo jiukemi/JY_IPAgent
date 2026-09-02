@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, mediaUrl, type CompetitorItem } from '../api/client'
 import type { SessionSnapshot } from '../types'
 import { FileDropZone } from '../components/FileDropZone'
+import { PhoneFitVideo } from '../components/PhonePreviewFrame'
 
 type Props = {
   session: SessionSnapshot
@@ -1093,12 +1094,12 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
         <div className="mx-auto w-full max-w-[280px]">
           <div className="relative aspect-[9/16] overflow-hidden rounded-2xl border border-[var(--border)] bg-black shadow-lg">
             {preview ? (
-              <video src={preview} controls className="absolute inset-0 h-full w-full object-cover" playsInline />
+              <PhoneFitVideo src={preview} controls />
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-xs text-[var(--muted)]">
                 <span className="text-2xl opacity-40">▶</span>
                 <span>解析 CDN 或提取口播后</span>
-                <span>在此显示竖屏预览</span>
+                <span>在此显示竖屏预览（横屏素材自适应留黑边）</span>
               </div>
             )}
           </div>

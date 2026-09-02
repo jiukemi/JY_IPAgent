@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from typing import Callable
 
@@ -17,9 +18,31 @@ from script.extract import extract_script_from_media
 from script.legal import legal_review_with_llm
 from script.llm_client import has_llm_key
 from script.rewrite import rewrite_script
-from workflow.deployment import is_cloud
+from workflow.deployment import is_cloud, step_engine
 
 ProgressFn = Callable[[float, str], None]
+
+
+def _cfg_for_share_extract(cfg: dict) -> dict:
+    """Share-link extract is allowed in both modes.
+
+    - Cloud mode: use configured CDN + transcript providers as-is.
+    - Local mode: still allow CDN / browser_share to fetch the video, but force
+      local ASR (Whisper / FunASR) for the transcript step.
+    """
+    if is_cloud(cfg, "script"):
+        return cfg
+    out = deepcopy(cfg)
+    engine = step_engine(cfg, "script")
+    asr = engine if engine in ("local_whisper", "funasr") else "local_whisper"
+    cloud = out.setdefault("script", {}).setdefault("cloud", {})
+    tr = cloud.setdefault("transcript", {})
+    tr["provider"] = asr
+    cdn = cloud.setdefault("cdn", {})
+    # Local users often leave CDN key empty; keep browser login as a usable path.
+    if not (cdn.get("fallback_provider") or "").strip():
+        cdn["fallback_provider"] = "browser_share"
+    return out
 
 
 def run_script_resolve_cdn(
@@ -29,8 +52,6 @@ def run_script_resolve_cdn(
     *,
     on_progress: ProgressFn | None = None,
 ) -> ExtractResult:
-    if not is_cloud(cfg, "script"):
-        raise ValueError("当前为本地模式，请上传文件或切换「运行方式 → ① 文案 → 云端」")
     return resolve_share_cdn(cfg, share_url, work_dir, on_progress=on_progress)
 
 
@@ -41,10 +62,9 @@ def run_script_extract_transcript(
     *,
     on_progress: ProgressFn | None = None,
 ) -> ExtractResult:
-    if not is_cloud(cfg, "script"):
-        raise ValueError("当前为本地模式，请上传文件或切换「运行方式 → ① 文案 → 云端」")
     from script.cloud import load_reference_meta
 
+    cfg = _cfg_for_share_extract(cfg)
     meta = load_reference_meta(work_dir)
     existing = None
     if meta.get("share_url") == share_url.strip() or meta.get("video_url") or meta.get("local_video"):
@@ -70,9 +90,9 @@ def run_script_extract_url(
     *,
     on_progress: ProgressFn | None = None,
 ) -> ExtractResult:
-    if not is_cloud(cfg, "script"):
-        raise ValueError("当前为本地模式，请上传文件或切换「运行方式 → ① 文案 → 云端」")
-    return extract_from_share_url(cfg, share_url, work_dir, on_progress=on_progress)
+    return extract_from_share_url(
+        _cfg_for_share_extract(cfg), share_url, work_dir, on_progress=on_progress
+    )
 
 
 def run_script_extract_file(

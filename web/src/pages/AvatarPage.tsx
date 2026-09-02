@@ -14,6 +14,7 @@ import {
   PhonePreviewSlot,
   type PreviewAspect,
 } from '../components/PhonePreviewColumn'
+import { PhoneFitVideo } from '../components/PhonePreviewFrame'
 import { ActionBtn, Panel } from './ScriptPage'
 
 type Props = { session: SessionSnapshot; onUpdate: (s: SessionSnapshot) => void }
@@ -121,7 +122,6 @@ export function AvatarPage({ session, onUpdate }: Props) {
   } | null>(null)
   /** User-selected target aspect for preview / guidance (HeyGem follows reference video). */
   const [targetAspect, setTargetAspect] = useState<PreviewAspect>('9:16')
-  const [previewAspect, setPreviewAspect] = useState<PreviewAspect>('9:16')
   const [avatarAspect, setAvatarAspect] = useState<PreviewAspect | null>(null)
 
   const probeVideoAspect = useCallback((url: string) => {
@@ -214,7 +214,6 @@ export function AvatarPage({ session, onUpdate }: Props) {
 
   const onTargetAspectChange = (asp: PreviewAspect) => {
     setTargetAspect(asp)
-    if (!video) setPreviewAspect(asp)
   }
 
   const onBackendChange = (value: string) => {
@@ -275,10 +274,6 @@ export function AvatarPage({ session, onUpdate }: Props) {
       setBackend('heygem')
     }
   }, [trackMode])
-
-  useEffect(() => {
-    setPreviewAspect('9:16')
-  }, [selectedLipsyncPath])
 
   const onRealVideoPick = (file: File | null) => {
     setLibraryMedia(null)
@@ -500,16 +495,11 @@ export function AvatarPage({ session, onUpdate }: Props) {
 
   const video = mediaUrl(selectedLipsyncPath || session.lipsync_video, session.lipsync_mtime)
 
-  useEffect(() => {
-    if (!video) setPreviewAspect(targetAspect)
-  }, [targetAspect, video])
-
   // Sync target aspect from HeyGem reference video when known (user can still override).
   useEffect(() => {
     if (!avatarAspect || backend !== 'heygem') return
     setTargetAspect(avatarAspect)
-    if (!video) setPreviewAspect(avatarAspect)
-  }, [avatarAspect, backend, video])
+  }, [avatarAspect, backend])
 
   const aspectMismatch =
     backend === 'heygem' && avatarAspect != null && targetAspect !== avatarAspect
@@ -920,40 +910,24 @@ export function AvatarPage({ session, onUpdate }: Props) {
           )}
         </Panel>
 
-        <PhonePreviewColumn aspect={previewAspect}>
+        <PhonePreviewColumn aspect="9:16">
           <PhonePreviewSlot
-            label={previewAspect === '16:9' ? '口播成片 · 横屏' : '口播成片 · 竖屏'}
-            aspect={previewAspect}
+            label={targetAspect === '16:9' ? '口播成片 · 横屏素材（9:16 框内自适应）' : '口播成片 · 竖屏'}
+            aspect="9:16"
           >
             {video ? (
-              <video
-                key={video}
-                src={video}
-                controls
-                playsInline
-                className="absolute inset-0 h-full w-full bg-black object-contain"
-                onLoadedMetadata={(e) => {
-                  const el = e.currentTarget
-                  if (el.videoWidth > 0 && el.videoHeight > 0) {
-                    setPreviewAspect(el.videoWidth >= el.videoHeight ? '16:9' : '9:16')
-                  }
-                }}
-              />
+              <PhoneFitVideo key={video} src={video} controls />
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center text-xs text-[var(--muted)]">
                 <span className="text-2xl opacity-40">▶</span>
                 <span>生成对口型后</span>
-                <span>在此预览（{targetAspect}）</span>
+                <span>在此预览（目标 {targetAspect}，框固定 9:16）</span>
               </div>
             )}
           </PhonePreviewSlot>
 
           {lipsyncTakes.length > 0 && (
-            <div
-              className={`mx-auto w-full rounded-xl border border-[var(--border)] bg-[var(--panel)] p-2 ${
-                previewAspect === '16:9' ? 'max-w-[320px]' : 'max-w-[280px]'
-              }`}
-            >
+            <div className="mx-auto w-full max-w-[280px] rounded-xl border border-[var(--border)] bg-[var(--panel)] p-2">
               <div className="mb-1.5 flex items-center justify-between px-1">
                 <span className="text-xs font-medium text-[var(--text)]">口播版本</span>
                 <span className="text-[10px] text-[var(--muted)]">{lipsyncTakes.length} 条</span>
@@ -1003,9 +977,7 @@ export function AvatarPage({ session, onUpdate }: Props) {
             <a
               href={video}
               download
-              className={`mx-auto block w-full rounded-lg border border-[var(--border)] px-3 py-1.5 text-center text-xs hover:bg-[var(--panel)] ${
-                previewAspect === '16:9' ? 'max-w-[320px]' : 'max-w-[280px]'
-              }`}
+              className="mx-auto block w-full max-w-[280px] rounded-lg border border-[var(--border)] px-3 py-1.5 text-center text-xs hover:bg-[var(--panel)]"
             >
               导出口播视频
             </a>

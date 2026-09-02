@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { mediaUrl } from '../api/client'
+import { PhoneFitVideo } from './PhonePreviewFrame'
 
 type Source = { id: string; label: string; path: string }
 
@@ -130,11 +131,9 @@ export function CoverFramePickerModal({
 
           <div className="relative mx-auto aspect-[9/16] w-full max-w-[280px] overflow-hidden rounded-xl border border-[var(--border)] bg-black">
             {videoSrc ? (
-              <video
+              <PhoneFitVideo
                 ref={videoRef}
                 src={videoSrc}
-                className="absolute inset-0 h-full w-full object-contain"
-                playsInline
                 preload="metadata"
                 onLoadedMetadata={(e) => {
                   const v = e.currentTarget

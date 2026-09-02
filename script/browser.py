@@ -76,16 +76,38 @@ def _cleanup_stale_locks(user_dir: Path) -> None:
 
 def _launch_kwargs(cfg: dict, *, headless: bool) -> dict:
     b = browser_cfg(cfg)
+    # Prefer system Chrome when available: Playwright 自带 Chromium 打开抖音常白屏/被风控。
+    channel = (b.get("channel") or "").strip()
+    if not channel:
+        channel = "chrome"
     kw: dict = {
         "headless": headless,
-        "args": ["--disable-blink-features=AutomationControlled"],
+        "args": [
+            "--disable-blink-features=AutomationControlled",
+            "--disable-features=IsolateOrigins,site-per-process",
+        ],
+        "ignore_default_args": ["--enable-automation"],
         "viewport": {"width": 1280, "height": 900},
         "locale": "zh-CN",
+        "timezone_id": "Asia/Shanghai",
+        "channel": channel,
     }
-    channel = (b.get("channel") or "").strip()
-    if channel:
-        kw["channel"] = channel
     return kw
+
+
+def _page_looks_blank(page) -> bool:
+    try:
+        html = page.content() or ""
+    except Exception:
+        return True
+    text = html.strip()
+    if len(text) < 400:
+        return True
+    low = text.lower()
+    if "douyin" in low or "kuaishou" in low or "xiaohongshu" in low or "bilibili" in low:
+        return False
+    # SPA shell with almost no body content
+    return "<body" in low and len(text) < 1200
 
 
 @contextmanager
@@ -99,10 +121,20 @@ def persistent_context(
     user_dir = user_data_dir(cfg, platform_id)
     _cleanup_stale_locks(user_dir)
     with sync_playwright() as pw:
-        ctx = pw.chromium.launch_persistent_context(
-            str(user_dir),
-            **_launch_kwargs(cfg, headless=headless),
-        )
+        kw = _launch_kwargs(cfg, headless=headless)
+        try:
+            ctx = pw.chromium.launch_persistent_context(str(user_dir), **kw)
+        except Exception as first_exc:
+            # channel=chrome 找不到时回退到 Playwright Chromium
+            if kw.get("channel"):
+                kw = dict(kw)
+                kw.pop("channel", None)
+                try:
+                    ctx = pw.chromium.launch_persistent_context(str(user_dir), **kw)
+                except Exception:
+                    raise first_exc from None
+            else:
+                raise
         try:
             yield ctx
         finally:
@@ -121,7 +153,7 @@ def _detect_login_from_cookies(ctx, platform: PlatformConfig) -> tuple[bool, int
 
 
 def check_login_status(cfg: dict, platform_id: str = "") -> dict:
-    """Best-effort: visit platform homepage and detect login cookies."""
+    """Best-effort: read saved cookies (prefer no navigation); optionally open homepage."""
     platform_id = platform_id or "douyin"
     platform = get_platform(platform_id)
     if not platform:
@@ -137,10 +169,22 @@ def check_login_status(cfg: dict, platform_id: str = "") -> dict:
         }
     try:
         with persistent_context(cfg, headless=True, platform_id=platform_id) as ctx:
+            # Cookie-only first — 避免再开首页白屏/风控把检测打挂
+            logged_in, n = _detect_login_from_cookies(ctx, platform)
+            if logged_in:
+                return {
+                    "ready": True,
+                    "logged_in": True,
+                    "message": "已检测到登录态",
+                    "profile_dir": str(user_data_dir(cfg, platform_id)),
+                    "platform": platform_id,
+                    "platform_name": platform.name,
+                    "cookie_count": n,
+                }
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             try:
                 page.goto(platform.login_url, wait_until="domcontentloaded", timeout=45000)
-                page.wait_for_timeout(2500)
+                page.wait_for_timeout(2000)
             except Exception as exc:
                 logged_in, n = _detect_login_from_cookies(ctx, platform)
                 hint = "访问失败（403 通常是开了梯子/VPN，请关闭后重试）"
@@ -154,7 +198,7 @@ def check_login_status(cfg: dict, platform_id: str = "") -> dict:
                     "cookie_count": n,
                 }
             logged_in, n = _detect_login_from_cookies(ctx, platform)
-            msg = "已检测到登录态" if logged_in else f"未登录或登录已过期，请点击「浏览器登录」"
+            msg = "已检测到登录态" if logged_in else "未登录或登录已过期，请点击「浏览器登录」（需用本机 Chrome，勿开梯子）"
             return {
                 "ready": True,
                 "logged_in": logged_in,
@@ -165,10 +209,16 @@ def check_login_status(cfg: dict, platform_id: str = "") -> dict:
                 "cookie_count": n,
             }
     except Exception as exc:
+        err = str(exc)
+        if "Executable doesn't exist" in err or "chrome" in err.lower() and "channel" in err.lower():
+            err = (
+                f"{err}\n未找到本机 Google Chrome。请安装 Chrome，或在 config.yaml 里把 "
+                "script.cloud.browser.channel 改成空后执行：py -3.11 -m playwright install chromium"
+            )
         return {
             "ready": False,
             "logged_in": False,
-            "message": str(exc),
+            "message": err,
             "profile_dir": str(user_data_dir(cfg, platform_id)),
             "platform": platform_id,
             "platform_name": platform.name,
@@ -190,10 +240,19 @@ def open_login_browser(cfg: dict, *, wait_close: bool = True, platform_id: str =
     closed = threading.Event()
 
     with sync_playwright() as pw:
-        ctx = pw.chromium.launch_persistent_context(
-            str(user_dir),
-            **_launch_kwargs(cfg, headless=False),
-        )
+        kw = _launch_kwargs(cfg, headless=False)
+        try:
+            ctx = pw.chromium.launch_persistent_context(str(user_dir), **kw)
+        except Exception as first_exc:
+            if kw.get("channel"):
+                kw = dict(kw)
+                kw.pop("channel", None)
+                try:
+                    ctx = pw.chromium.launch_persistent_context(str(user_dir), **kw)
+                except Exception:
+                    raise first_exc from None
+            else:
+                raise
 
         def _signal_close(*_a, **_kw) -> None:
             closed.set()
@@ -224,23 +283,42 @@ def open_login_browser(cfg: dict, *, wait_close: bool = True, platform_id: str =
         except Exception:
             pass
 
-        try:
-            page.goto(platform.login_url, wait_until="domcontentloaded", timeout=60000)
-        except Exception as exc:
-            hint = "403 通常是开了梯子/VPN，平台封境外 IP，请关闭后重试"
+        def _show_manual_hint(reason: str) -> None:
+            hint = "403/白屏通常是：1) 开了梯子/VPN  2) 没用本机 Chrome  3) 被风控。请关闭 VPN 后在地址栏手动打开下方链接登录。"
+            alt = platform.creator_upload_url or platform.login_url
             html = (
-                "<body style='font-family:system-ui;padding:40px;color:#333'>"
-                f"<h2>加载{platform.name}失败</h2>"
-                f"<p>请手动在地址栏打开 <b>{platform.login_url}</b> 登录。</p>"
+                "<body style='font-family:system-ui;padding:40px;color:#333;line-height:1.6'>"
+                f"<h2>加载{platform.name}失败或白屏</h2>"
+                f"<p>请在地址栏打开：</p>"
+                f"<p><b>{platform.login_url}</b></p>"
+                f"<p>或创作者入口：<b>{alt}</b></p>"
                 f"<p style='color:#c00'>{hint}</p>"
                 f"<pre style='background:#f4f4f4;padding:12px;border-radius:8px;"
-                f"white-space:pre-wrap'>{str(exc)[:300]}</pre>"
+                f"white-space:pre-wrap'>{reason[:400]}</pre>"
+                "<p>登录成功后<strong>关闭本窗口</strong>，回到软件点刷新状态。</p>"
                 "</body>"
             )
             try:
                 page.set_content(html)
             except Exception:
                 pass
+
+        try:
+            page.goto(platform.login_url, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(1500)
+            if _page_looks_blank(page):
+                # 抖音首页常对自动化白屏：改走创作者上传页更容易出登录框
+                alt = (platform.creator_upload_url or "").strip()
+                if alt and alt.rstrip("/") != platform.login_url.rstrip("/"):
+                    try:
+                        page.goto(alt, wait_until="domcontentloaded", timeout=60000)
+                        page.wait_for_timeout(1500)
+                    except Exception as exc2:
+                        _show_manual_hint(str(exc2))
+                if _page_looks_blank(page):
+                    _show_manual_hint("页面内容几乎为空（白屏）。请手动在地址栏输入链接登录。")
+        except Exception as exc:
+            _show_manual_hint(str(exc))
 
         if wait_close:
             while not closed.is_set():

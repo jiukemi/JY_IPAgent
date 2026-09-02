@@ -15,6 +15,7 @@ import type { SessionItem, SessionSnapshot, StepId } from './types'
 import { applyTheme, getInitialTheme, type ThemeId } from './theme'
 import { JobQueueProvider, useJobQueue } from './context/JobQueueContext'
 import { FreePrivateNoticeModal } from './components/FreePrivateNoticeModal'
+import { UpdateModal } from './components/UpdateModal'
 
 const emptySnap = (): SessionSnapshot => ({
   path: '',
@@ -143,6 +144,7 @@ function AppShell({
   newSession: () => Promise<void>
 }) {
   const jobQueue = useJobQueue()
+  const [updateCheckOpen, setUpdateCheckOpen] = useState(false)
 
   return (
     <div className="flex h-full min-h-screen flex-col bg-[var(--bg)] text-[var(--text)]">
@@ -226,6 +228,12 @@ function AppShell({
         }}
         focusSection={settingsFocus}
         configVersion={configVersion}
+        onCheckUpdates={() => setUpdateCheckOpen(true)}
+      />
+      <UpdateModal
+        autoCheck
+        forceOpen={updateCheckOpen}
+        onClose={() => setUpdateCheckOpen(false)}
       />
     </div>
   )

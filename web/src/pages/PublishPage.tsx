@@ -8,6 +8,7 @@ import { StylePackFields, type StylePackOption } from '../components/StylePackFi
 import { AssetPickerModal, type PickerAsset } from '../components/AssetPickerModal'
 import { LecturerCropModal, type CropBox } from '../components/LecturerCropModal'
 import { PhonePreviewColumn, PhonePreviewSlot, type PreviewAspect } from '../components/PhonePreviewColumn'
+import { PhoneFitVideo } from '../components/PhonePreviewFrame'
 import { detectVideoAspectFromUrl, detectVideoDuration, pathsRoughlyEqual } from '../utils/mediaFileMeta'
 import { ActionBtn, Panel, TabBtn } from './ScriptPage'
 
@@ -219,7 +220,7 @@ function PipMediaCard({
               muted
               preload="metadata"
               playsInline
-              className="absolute inset-0 h-full w-full object-cover"
+              className="absolute inset-0 h-full w-full object-contain bg-black"
             />
           ) : (
             <img src={url} alt="" className="absolute inset-0 h-full w-full object-cover" />
@@ -3714,30 +3715,16 @@ export function PublishPage({ session, onUpdate }: Props) {
               </div>
               {rightPreviewTab === 'lipsync' ? (
                 <PhonePreviewSlot
-                  aspect={previewAspect}
+                  aspect="9:16"
                   label="数字人口播"
                   note={
                     lipsyncTakes.length > 0
-                      ? `当前发布源 · ${publishAspect === 'landscape_16_9' ? '16:9' : '9:16'}`
-                      : undefined
+                      ? `当前发布源 · 导出 ${publishAspect === 'landscape_16_9' ? '16:9' : '9:16'} · 预览框固定 9:16`
+                      : '横屏素材在 9:16 框内宽度铺满、高度自适应'
                   }
                 >
                   {lipsyncPreviewUrl ? (
-                    <video
-                      key={lipsyncPreviewUrl}
-                      src={lipsyncPreviewUrl}
-                      controls
-                      playsInline
-                      className="absolute inset-0 h-full w-full bg-black object-contain"
-                      onLoadedMetadata={(e) => {
-                        const el = e.currentTarget
-                        if (el.videoWidth > 0 && el.videoHeight > 0) {
-                          const asp =
-                            el.videoWidth >= el.videoHeight ? 'landscape_16_9' : 'portrait_9_16'
-                          setPublishAspect((prev) => (prev === asp ? prev : asp))
-                        }
-                      }}
-                    />
+                    <PhoneFitVideo key={lipsyncPreviewUrl} src={lipsyncPreviewUrl} controls />
                   ) : (
                     <div className="absolute inset-0 flex items-center justify-center px-3 text-center text-xs text-[var(--muted)]">
                       暂无口播视频
@@ -3826,12 +3813,8 @@ export function PublishPage({ session, onUpdate }: Props) {
           )}
 
           {resultVideo && (
-            <PhonePreviewSlot aspect={previewAspect} label="发布后成片">
-              <video
-                src={resultVideo}
-                controls
-                className="absolute inset-0 h-full w-full object-contain bg-black"
-              />
+            <PhonePreviewSlot aspect="9:16" label="发布后成片">
+              <PhoneFitVideo src={resultVideo} controls />
             </PhonePreviewSlot>
           )}
         </PhonePreviewColumn>
