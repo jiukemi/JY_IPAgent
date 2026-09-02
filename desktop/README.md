@@ -1,7 +1,5 @@
 # Agent Desktop（单安装包）
 
-规格：`docs/superpowers/specs/2026-07-28-desktop-full-light-design.md`
-
 ## 开发启动
 
 1. `cd web && npm run build`
@@ -18,7 +16,7 @@
 
 ## 打包给别人用
 
-详见 **`docs/packaging-hosting.md`**。
+见根目录 [README.md](../README.md)「打 Windows 安装包」与 `scripts/ship.ps1`。
 
 **Python / FFmpeg：** 打包版首次启动自动下载到用户目录 `runtime/`。
 
