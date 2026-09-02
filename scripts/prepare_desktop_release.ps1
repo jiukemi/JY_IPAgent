@@ -64,6 +64,7 @@ foreach ($d in $dirs) { Copy-Tree $d }
 # Minimal data scaffold (no large caches)
 $dataDirs = @(
   "data\components",
+  "data\quark",
   "data\sessions",
   "data\assets",
   "data\bgm"
@@ -73,6 +74,9 @@ foreach ($d in $dataDirs) {
   New-Item -ItemType Directory -Force -Path $p | Out-Null
 }
 Copy-Item -Force (Join-Path $Root "data\components\manifest.example.json") (Join-Path $Out "data\components\manifest.example.json")
+if (Test-Path (Join-Path $Root "data\quark\catalog.json")) {
+  Copy-Item -Force (Join-Path $Root "data\quark\*") (Join-Path $Out "data\quark\") -ErrorAction SilentlyContinue
+}
 
 # Drop heavy / junk from copied trees
 $drop = @(
