@@ -1,3 +1,5 @@
+import { mediaUrl } from '../api/client'
+
 export type CloneVoiceEmoItem = {
   label: string
   value: string
@@ -78,7 +80,7 @@ export function emoPreviewKey(
 }
 
 export function sessionAudioUrl(path: string): string {
-  return `/api/files/session?path=${encodeURIComponent(path)}&t=${Date.now()}`
+  return mediaUrl(path, Date.now()) || `/api/files/session?path=${encodeURIComponent(path)}&t=${Date.now()}`
 }
 
 /** 该音色下已成功生成过的情感（不含「无情感」空值） */

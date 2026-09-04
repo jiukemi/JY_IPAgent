@@ -100,22 +100,35 @@ def boot_workers() -> None:
         print(f"* 任务队列 worker 未启动: {exc}")
 
     def _warm_engines() -> None:
+        """Do NOT load IndexTTS/FunASR onto GPU at startup.
+
+        Warm workers stay opt-in via settings (worker_autostart) or first 配音/转写
+        when worker_enabled. Silent GPU load made「试听」看起来没动静却占满显存。
+        """
         cfg = None
         try:
             from workflow.app_config import load_cfg
-            from tts.indextts_client import ensure_indextts_worker
 
             cfg = load_cfg()
-            if ensure_indextts_worker(cfg):
-                print("* IndexTTS2 常驻 worker 已启动")
+            it = cfg.get("indextts") or {}
+            if it.get("worker_enabled") is not False and it.get("worker_autostart") is True:
+                from tts.indextts_client import ensure_indextts_worker
+
+                if ensure_indextts_worker(cfg):
+                    print("* IndexTTS2 常驻 worker 已按配置预启动")
+            else:
+                print("* IndexTTS2 常驻未预启动（首次配音/情感试听时再加载，避免空占 GPU）")
         except Exception as exc:
             print(f"* IndexTTS2 worker 未预启动: {exc}")
         try:
             from workflow.app_config import load_cfg
             from script.funasr_client import ensure_funasr_worker
 
-            if ensure_funasr_worker(cfg if cfg is not None else load_cfg()):
-                print("* FunASR 常驻 worker 已启动")
+            cfg = cfg if cfg is not None else load_cfg()
+            fa = (cfg.get("script") or {}).get("funasr") or {}
+            if fa.get("worker_enabled") is True and fa.get("worker_autostart") is True:
+                if ensure_funasr_worker(cfg):
+                    print("* FunASR 常驻 worker 已按配置预启动")
         except Exception as exc:
             print(f"* FunASR worker 未预启动: {exc}")
         try:

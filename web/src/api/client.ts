@@ -23,11 +23,65 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>
 }
 
+function isDesktopShell(): boolean {
+  if (typeof window === 'undefined') return false
+  return Boolean((window as unknown as { agentDesktop?: { isDesktop?: boolean } }).agentDesktop?.isDesktop)
+}
+
+function isAbsoluteFsPath(p: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(p) || p.startsWith('\\\\') || (p.startsWith('/') && !p.startsWith('//'))
+}
+
+/** Desktop: map absolute disk path → agent-media:// (direct disk read). */
 export function mediaUrl(path: string | null | undefined, cacheBust?: number | null): string | null {
   if (!path) return null
+  if (path.startsWith('data:') || path.startsWith('blob:') || path.startsWith('agent-media:')) return path
+  if (isDesktopShell() && isAbsoluteFsPath(path) && !path.startsWith('http')) {
+    let u = `agent-media://local/?p=${encodeURIComponent(path)}`
+    if (cacheBust != null) u += `&v=${cacheBust}`
+    return u
+  }
   const base = `/api/files/session?path=${encodeURIComponent(path)}`
   if (cacheBust == null) return base
   return `${base}&v=${cacheBust}`
+}
+
+/**
+ * Turn any preview src (HTTP API / abs path / data URL) into the fastest playable URL.
+ * Prefer local_path on desktop so audio/video never round-trip through FastAPI.
+ */
+export function playableUrl(
+  urlOrPath: string | null | undefined,
+  opts?: { localPath?: string | null; cacheBust?: number | null },
+): string | null {
+  const bust = opts?.cacheBust ?? null
+  if (opts?.localPath) {
+    const local = mediaUrl(opts.localPath, bust)
+    if (local) return local
+  }
+  if (!urlOrPath) return null
+  if (
+    urlOrPath.startsWith('data:') ||
+    urlOrPath.startsWith('blob:') ||
+    urlOrPath.startsWith('agent-media:')
+  ) {
+    return urlOrPath
+  }
+  if (isAbsoluteFsPath(urlOrPath)) {
+    return mediaUrl(urlOrPath, bust) || urlOrPath
+  }
+  // Rewrite session file proxy → disk
+  try {
+    const q = urlOrPath.includes('?') ? urlOrPath.slice(urlOrPath.indexOf('?') + 1) : ''
+    if (urlOrPath.includes('/api/files/session') && q) {
+      const params = new URLSearchParams(q)
+      const p = params.get('path')
+      if (p) return mediaUrl(p, bust ?? (params.get('v') ? Number(params.get('v')) : null)) || urlOrPath
+    }
+  } catch {
+    /* ignore */
+  }
+  return urlOrPath
 }
 
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
@@ -91,6 +145,7 @@ export const api = {
       ready: boolean
       logged_in: boolean
       message: string
+      deferred?: boolean
       profile_dir?: string
       playwright_installed?: boolean
       platform?: string
@@ -208,6 +263,12 @@ export const api = {
   sessionSnapshot: (path: string) =>
     request<SessionSnapshot>(`/api/sessions/snapshot?path=${encodeURIComponent(path)}`),
 
+  prepareSessionMedia: (path: string) =>
+    request<{ ok: boolean; path: string; optimized: boolean }>(
+      `/api/files/prepare?path=${encodeURIComponent(path)}`,
+      { method: 'POST' },
+    ),
+
   renameSession: (path: string, name: string) =>
     request<{ path: string; name: string }>(
       `/api/sessions?path=${encodeURIComponent(path)}`,
@@ -237,6 +298,16 @@ export const api = {
     fd.append('share_url', shareUrl)
     if (file) fd.append('media', file)
     return request<StageResult>('/api/script/transcript', { method: 'POST', body: fd })
+  },
+
+  scriptPrepareMedia: (sessionPath: string, file: File) => {
+    const fd = new FormData()
+    fd.append('session_path', sessionPath)
+    fd.append('media', file)
+    return request<{ ok: boolean; ref_media: string }>('/api/script/prepare_media', {
+      method: 'POST',
+      body: fd,
+    })
   },
 
   scriptExtract: (sessionPath: string, shareUrl: string, file?: File) => {
@@ -1011,6 +1082,15 @@ export const api = {
   avatarChoices: () => request<{ id: string; label: string }[]>('/api/avatar/choices'),
 
   avatarLibrary: () => request<import('../components/AvatarPickerModal').AvatarItem[]>('/api/avatar/library'),
+
+  prepareAvatar: (id: string) =>
+    request<{
+      ok: boolean
+      thumb_url: string
+      media_url: string
+      poster_ready: boolean
+      streamable: boolean
+    }>(`/api/avatar/prepare/${encodeURIComponent(id)}`, { method: 'POST' }),
 
   getEdition: () =>
     request<{
@@ -2065,6 +2145,8 @@ export const api = {
       | 'tts_synthesize'
       | 'avatar_lipsync'
       | 'engine_install'
+      | 'script_extract'
+      | 'subtitle_asr'
     payload: Record<string, unknown>
     title?: string
     force?: boolean

@@ -49,9 +49,13 @@ function JobActiveBanner() {
         ? '配音'
         : running?.type === 'publish_run'
           ? '成片'
-          : running
-            ? '任务'
-            : '排队'
+          : running?.type === 'script_extract'
+            ? '文案提取'
+            : running?.type === 'subtitle_asr'
+              ? '字幕 ASR'
+              : running
+                ? '任务'
+                : '排队'
   const pct = Math.round(Math.max(0, Math.min(1, running?.progress || 0)) * 100)
   return (
     <div className="mx-auto mt-2 w-full max-w-[1600px] px-5">
@@ -173,7 +177,10 @@ function AppShell({
             <div className={step === 'script' ? 'contents' : 'hidden'}>
               <ScriptPage session={session} onUpdate={setSession} configVersion={configVersion} />
             </div>
-            {(step === 'tts' || step === 'clone') && (
+            <div
+              className={step === 'tts' || step === 'clone' ? 'contents' : 'hidden'}
+              aria-hidden={!(step === 'tts' || step === 'clone')}
+            >
               <TtsPage
                 session={session}
                 onUpdate={setSession}
@@ -184,8 +191,9 @@ function AppShell({
                 configVersion={configVersion}
                 voiceVersion={voiceVersion}
                 onVoiceSaved={() => setVoiceVersion((v) => v + 1)}
+                active={step === 'tts' || step === 'clone'}
               />
-            )}
+            </div>
             <div className={step === 'avatar' ? 'contents' : 'hidden'} aria-hidden={step !== 'avatar'}>
               <AvatarPage session={session} onUpdate={setSession} />
             </div>

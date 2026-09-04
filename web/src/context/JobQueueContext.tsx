@@ -18,6 +18,8 @@ type EnqueueInput = {
     | 'tts_synthesize'
     | 'avatar_lipsync'
     | 'engine_install'
+    | 'script_extract'
+    | 'subtitle_asr'
   payload: Record<string, unknown>
   title?: string
   force?: boolean

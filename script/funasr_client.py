@@ -68,6 +68,7 @@ def _start_worker(cfg: dict) -> subprocess.Popen:
     import os as _os
     env = _os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
     proc = subprocess.Popen(
         cmd,
         cwd=str(ROOT),
@@ -107,6 +108,16 @@ def ensure_funasr_worker(cfg: dict) -> bool:
     global _worker_proc, _worker_model
     if not worker_enabled(cfg):
         return False
+    # Fail fast with a clear message instead of a silent broken venv launch
+    from script.extract import _funasr_available, _funasr_python
+
+    if not _funasr_available(cfg):
+        raise RuntimeError(
+            "FunASR 环境缺少 torch（常驻 ASR 无法启动）。\n"
+            f"当前解释器：{_funasr_python(cfg)}\n"
+            "请执行：tools\\FunASR\\.venv\\Scripts\\python.exe -m pip install torch torchaudio\n"
+            "或运行 .\\scripts\\setup\\setup_funasr.ps1"
+        )
     model = worker_model(cfg)
     with _worker_lock:
         if (

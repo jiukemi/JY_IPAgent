@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import sys
 import threading
+import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 _LOCK = threading.RLock()
 
@@ -20,6 +24,8 @@ JOB_TYPES = frozenset(
         "tts_synthesize",
         "avatar_lipsync",
         "engine_install",
+        "script_extract",
+        "subtitle_asr",
     }
 )
 
@@ -30,6 +36,8 @@ DEFAULT_TITLES = {
     "tts_synthesize": "生成配音",
     "avatar_lipsync": "生成口播",
     "engine_install": "引擎安装",
+    "script_extract": "文案提取 / ASR",
+    "subtitle_asr": "字幕 ASR 提取",
 }
 
 ACTIVE_STATUSES = frozenset({"queued", "running"})
@@ -50,11 +58,106 @@ def index_path(session: Path) -> Path:
     return jobs_dir(session) / "index.json"
 
 
+@contextmanager
+def _interprocess_lock(lock_path: Path, *, timeout: float = 15.0) -> Iterator[None]:
+    """Exclusive lock across Python processes (thread lock alone is not enough on Windows)."""
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.monotonic() + timeout
+    fh = None
+    last_err: OSError | None = None
+    while time.monotonic() < deadline:
+        try:
+            fh = open(lock_path, "a+b")
+            if sys.platform == "win32":
+                import msvcrt
+
+                fh.seek(0)
+                # Lock one byte; non-blocking so we can retry
+                msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            break
+        except OSError as exc:
+            last_err = exc
+            if fh is not None:
+                try:
+                    fh.close()
+                except OSError:
+                    pass
+                fh = None
+            time.sleep(0.04)
+    else:
+        if fh is not None:
+            try:
+                fh.close()
+            except OSError:
+                pass
+        raise PermissionError(
+            f"任务队列文件正忙，请稍后重试（{lock_path.name}）"
+        ) from last_err
+
+    assert fh is not None
+    try:
+        yield
+    finally:
+        try:
+            if sys.platform == "win32":
+                import msvcrt
+
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            fh.close()
+        except OSError:
+            pass
+
+
 def _atomic_write(path: Path, data: Any) -> None:
+    """Write JSON atomically; retry on Windows WinError 5 (file briefly locked)."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    payload = json.dumps(data, ensure_ascii=False, indent=2)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
+    tmp.write_text(payload, encoding="utf-8")
+    last_err: BaseException | None = None
+    try:
+        for attempt in range(12):
+            try:
+                os.replace(str(tmp), str(path))
+                return
+            except PermissionError as exc:
+                last_err = exc
+                # Destination locked (AV / another reader). Drop it then replace.
+                try:
+                    if path.is_file():
+                        path.unlink()
+                    os.replace(str(tmp), str(path))
+                    return
+                except OSError as exc2:
+                    last_err = exc2
+                    time.sleep(0.05 * (attempt + 1))
+            except OSError as exc:
+                last_err = exc
+                time.sleep(0.05 * (attempt + 1))
+        # Last resort: non-atomic overwrite so the job itself does not die on a lock blip
+        try:
+            path.write_text(payload, encoding="utf-8")
+            return
+        except OSError as exc:
+            last_err = exc
+            raise PermissionError(
+                f"无法写入任务队列（拒绝访问）：{path}\n"
+                "请关闭占用该会话的多余后端进程后重试；若仍失败可暂时退出杀毒对 output 目录的实时扫描。"
+            ) from last_err
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _load_index(session: Path) -> list[dict[str, Any]]:
@@ -73,7 +176,19 @@ def _load_index(session: Path) -> list[dict[str, Any]]:
 
 
 def _save_index(session: Path, jobs: list[dict[str, Any]]) -> None:
+    """Caller must already hold `_hold_index(session)`."""
     _atomic_write(index_path(session), {"jobs": jobs})
+
+
+@contextmanager
+def _hold_index(session: Path) -> Iterator[Path]:
+    """Thread + cross-process lock for index read/modify/write."""
+    session = Path(session)
+    path = index_path(session)
+    lock = path.with_name(path.name + ".lock")
+    with _LOCK:
+        with _interprocess_lock(lock):
+            yield session
 
 
 def canonical_params_hash(payload: dict[str, Any] | None) -> str:
@@ -96,7 +211,7 @@ def canonical_params_hash(payload: dict[str, Any] | None) -> str:
 
 
 def list_jobs(session: Path, *, status: str | None = None) -> list[dict[str, Any]]:
-    with _LOCK:
+    with _hold_index(session):
         jobs = _load_index(Path(session))
     if status:
         jobs = [j for j in jobs if j.get("status") == status]
@@ -104,7 +219,7 @@ def list_jobs(session: Path, *, status: str | None = None) -> list[dict[str, Any
 
 
 def get_job(session: Path, job_id: str) -> dict[str, Any] | None:
-    with _LOCK:
+    with _hold_index(session):
         for j in _load_index(Path(session)):
             if j.get("id") == job_id:
                 return dict(j)
@@ -113,7 +228,7 @@ def get_job(session: Path, job_id: str) -> dict[str, Any] | None:
 
 def update_job(session: Path, job_id: str, **fields: Any) -> dict[str, Any] | None:
     session = Path(session)
-    with _LOCK:
+    with _hold_index(session):
         jobs = _load_index(session)
         for i, j in enumerate(jobs):
             if j.get("id") != job_id:
@@ -127,7 +242,7 @@ def update_job(session: Path, job_id: str, **fields: Any) -> dict[str, Any] | No
 
 def delete_job(session: Path, job_id: str) -> bool:
     session = Path(session)
-    with _LOCK:
+    with _hold_index(session):
         jobs = _load_index(session)
         new_jobs = [j for j in jobs if j.get("id") != job_id]
         if len(new_jobs) == len(jobs):
@@ -308,7 +423,7 @@ def delete_job_with_options(
 def clear_history(session: Path) -> int:
     """Remove done/failed/cancelled records. Returns count removed."""
     session = Path(session)
-    with _LOCK:
+    with _hold_index(session):
         jobs = _load_index(session)
         keep = [j for j in jobs if j.get("status") not in HISTORY_STATUSES]
         removed = len(jobs) - len(keep)
@@ -320,7 +435,7 @@ def clear_history(session: Path) -> int:
 def mark_stale_running_jobs(session: Path) -> int:
     """Map running → failed after process restart. Returns count."""
     session = Path(session)
-    with _LOCK:
+    with _hold_index(session):
         jobs = _load_index(session)
         n = 0
         for i, j in enumerate(jobs):
@@ -346,7 +461,7 @@ def find_duplicate(
     *,
     include_done: bool = True,
 ) -> dict[str, Any] | None:
-    with _LOCK:
+    with _hold_index(session):
         jobs = _load_index(Path(session))
     for j in jobs:
         if j.get("type") != job_type or j.get("params_hash") != params_hash:
@@ -419,7 +534,7 @@ def enqueue_job(
         "finished_at": None,
         "cancel_requested": False,
     }
-    with _LOCK:
+    with _hold_index(session):
         jobs = _load_index(session)
         jobs.insert(0, job)
         _save_index(session, jobs)
@@ -429,7 +544,7 @@ def enqueue_job(
 def prioritize_job(session: Path, job_id: str, *, priority: int = 100) -> dict[str, Any]:
     """Bump a queued job so the worker runs it sooner (higher priority first)."""
     session = Path(session)
-    with _LOCK:
+    with _hold_index(session):
         jobs = _load_index(session)
         for i, j in enumerate(jobs):
             if j.get("id") != job_id:
@@ -445,7 +560,7 @@ def prioritize_job(session: Path, job_id: str, *, priority: int = 100) -> dict[s
 def requeue_job(session: Path, job_id: str) -> dict[str, Any]:
     """Re-queue a failed/cancelled job with the same payload (full re-run, not mid-point resume)."""
     session = Path(session)
-    with _LOCK:
+    with _hold_index(session):
         jobs = _load_index(session)
         for i, j in enumerate(jobs):
             if j.get("id") != job_id:
@@ -472,7 +587,7 @@ def requeue_job(session: Path, job_id: str) -> dict[str, Any]:
 def request_cancel(session: Path, job_id: str) -> dict[str, Any]:
     """Cancel queued immediately; mark cancel_requested for running."""
     session = Path(session)
-    with _LOCK:
+    with _hold_index(session):
         jobs = _load_index(session)
         for i, j in enumerate(jobs):
             if j.get("id") != job_id:

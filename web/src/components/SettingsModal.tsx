@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { DesktopRuntimePanel } from './DesktopRuntimePanel'
 import { ModelSetupPanel } from './ModelSetupPanel'
@@ -28,6 +28,14 @@ type Props = {
 const MODES = [
   { value: 'local', label: '本地' },
   { value: 'cloud', label: '云端' },
+]
+
+type SettingsTab = 'engines' | 'install' | 'about'
+
+const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
+  { id: 'engines', label: '全局引擎设置' },
+  { id: 'install', label: '特殊引擎安装' },
+  { id: 'about', label: '关于我们' },
 ]
 
 export function SettingsModal({
@@ -67,36 +75,56 @@ export function SettingsModal({
   const [promptsOpen, setPromptsOpen] = useState(false)
   const [promptBusy, setPromptBusy] = useState(false)
   const [promptMsg, setPromptMsg] = useState('')
+  const [tab, setTab] = useState<SettingsTab>('engines')
+  const loadedConfigRef = useRef<number | null>(null)
 
   useEffect(() => {
     if (!open) return
     let cancelled = false
+    const cacheHit = loadedConfigRef.current === configVersion && settings != null
+    if (cacheHit) return
+
     setError('')
-    setSettings(null)
     api
       .getSettings()
       .then((res) => {
         if (cancelled) return
         setSettings(res.settings)
         setEngines(res.engines as typeof engines)
+        loadedConfigRef.current = configVersion
       })
       .catch((e) => {
         if (cancelled) return
         setError(e instanceof Error ? e.message : String(e))
       })
-    api.funasrWorkerStatus().then(setFunasrWorker).catch(() => setFunasrWorker(null))
-    api.ttsWorkerStatus().then(setTtsWorker).catch(() => setTtsWorker(null))
+    api.funasrWorkerStatus().then((s) => {
+      if (!cancelled) setFunasrWorker(s)
+    }).catch(() => {
+      if (!cancelled) setFunasrWorker(null)
+    })
+    api.ttsWorkerStatus().then((s) => {
+      if (!cancelled) setTtsWorker(s)
+    }).catch(() => {
+      if (!cancelled) setTtsWorker(null)
+    })
     api
       .getTextPrompts()
-      .then((r) => setPromptItems(r.items || []))
-      .catch(() => setPromptItems([]))
+      .then((r) => {
+        if (!cancelled) setPromptItems(r.items || [])
+      })
+      .catch(() => {
+        if (!cancelled) setPromptItems([])
+      })
     return () => {
       cancelled = true
     }
+    // settings intentionally omitted: used only as cache presence check
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, configVersion])
 
   useEffect(() => {
     if (!open || !focusSection || !settings) return
+    setTab(focusSection === 'env' ? 'install' : 'engines')
     const id = `settings-${focusSection}`
     requestAnimationFrame(() => {
       document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
@@ -206,89 +234,41 @@ export function SettingsModal({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
       <div className="flex max-h-[90vh] w-full max-w-5xl flex-col rounded-2xl border border-[var(--border)] bg-[var(--panel)]">
-        <div className="border-b border-[var(--border)] px-5 py-4">
+        <div className="border-b border-[var(--border)] px-5 pt-4">
           <h2 className="text-lg font-semibold">设置</h2>
           <p className="mt-1 text-sm text-[var(--muted)]">
-            选择「云端」时不显示本机模型/Worker；本地步骤才需要安装与常驻加速。
+            {tab === 'engines'
+              ? '配置各步骤的本地 / 云端引擎；本地步骤才需要安装模型与常驻加速。'
+              : tab === 'install'
+                ? '安装口播引擎、夸克加速包，以及本机模型与运行时修复。'
+                : '产品信息、反馈渠道与第三方组件声明。'}
           </p>
+          <div className="mt-3 flex gap-1 overflow-x-auto pb-px" role="tablist" aria-label="设置分类">
+            {SETTINGS_TABS.map((t) => {
+              const active = tab === t.id
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={active}
+                  onClick={() => setTab(t.id)}
+                  className={`shrink-0 rounded-t-lg border px-3.5 py-2 text-sm transition ${
+                    active
+                      ? 'border-[var(--border)] border-b-[var(--panel)] bg-[var(--panel)] font-semibold text-[var(--accent)]'
+                      : 'border-transparent text-[var(--muted)] hover:bg-[var(--bg)] hover:text-[var(--text)]'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              )
+            })}
+          </div>
         </div>
         <div className="space-y-4 overflow-y-auto p-5">
-          <SettingsCard title="桌面运行时 · 一键修复" id="settings-runtime">
-            <p className="mb-2 text-xs text-[var(--muted)]">
-              启动异常、依赖损坏时，可检测并一键清除运行时后自动重启（无需手动删文件夹）。
-            </p>
-            <DesktopRuntimePanel />
-          </SettingsCard>
-          <SettingsCard title="口播引擎安装向导" id="settings-heygem-wizard">
-            <p className="mb-2 text-xs text-[var(--muted)]">
-              Docker → 夸克加速包（按显卡）→ 自动加载镜像并启动。安装包体积不含镜像。
-            </p>
-            <HeyGemInstallWizard />
-          </SettingsCard>
-          <SettingsCard title="网盘加速 · 夸克（免费线）" id="settings-quark">
-            <p className="mb-2 text-xs text-[var(--muted)]">
-              无外网时用夸克下载大包。口播引擎按显卡分「通用 / RTX50」两包；通用组件与显卡无关。也可在上方向导中完成口播安装。
-            </p>
-            <QuarkAccelPanel />
-          </SettingsCard>
-          {needsLocalEnv && (
-            <SettingsCard title="本机环境 · GPU 与模型" id="settings-env">
-              <p className="text-xs text-[var(--muted)]">
-                仅在步骤选择「本地」时显示。云端引擎不需要本机模型安装。
-              </p>
-              <ModelSetupPanel
-                currentEngine={settings.tts_mode === 'local' ? settings.tts_engine : undefined}
-                onRefresh={onSaved}
-                defaultOpen={focusSection === 'env'}
-              />
-            </SettingsCard>
-          )}
-          {showWorkers && (
-            <SettingsCard title="常驻加速 · Worker" id="settings-workers">
-              <p className="text-xs text-[var(--muted)]">
-                仅本地步骤需要。常驻会预加载模型到内存以提速，关闭即释放。
-              </p>
-              {showTtsWorker && (
-                <WorkerToggle
-                  name="IndexTTS2 配音引擎"
-                  desc="常驻约占 1-2GB 内存 · 首次合成从 ~20s 降到 ~3s"
-                  state={ttsWorker}
-                  busy={workerBusy}
-                  onToggle={async () => {
-                    if (!ttsWorker) return
-                    setWorkerBusy('tts')
-                    try {
-                      if (ttsWorker.running) await api.ttsWorkerStop()
-                      else await api.ttsWorkerStart()
-                      setTtsWorker(await api.ttsWorkerStatus())
-                    } finally {
-                      setWorkerBusy('')
-                    }
-                  }}
-                />
-              )}
-              {showFunasrWorker && (
-                <WorkerToggle
-                  name="FunASR 语音转写 (SenseVoice)"
-                  desc="常驻约占 500MB 内存 · 转写从 ~22s 降到 ~0.2s"
-                  state={funasrWorker}
-                  busy={workerBusy}
-                  onToggle={async () => {
-                    if (!funasrWorker) return
-                    setWorkerBusy('funasr')
-                    try {
-                      if (funasrWorker.running) await api.funasrWorkerStop()
-                      else await api.funasrWorkerStart()
-                      setFunasrWorker(await api.funasrWorkerStatus())
-                    } finally {
-                      setWorkerBusy('')
-                    }
-                  }}
-                />
-              )}
-            </SettingsCard>
-          )}
-          <SettingsCard title="① 文案" id="settings-script">
+          {tab === 'engines' && (
+            <>
+              <SettingsCard title="① 文案" id="settings-script">
             <ModeEngineRow
               mode={settings.script_mode}
               engine={settings.script_engine}
@@ -593,7 +573,102 @@ export function SettingsModal({
               onEngine={(v) => patch('publish_engine', v)}
             />
           </SettingsCard>
-          <SettingsCard title="关于我们" id="settings-about">
+            </>
+          )}
+
+          {tab === 'install' && (
+            <>
+              <SettingsCard title="桌面运行时 · 一键修复" id="settings-runtime">
+                <p className="mb-2 text-xs text-[var(--muted)]">
+                  启动异常、依赖损坏时，可检测并一键清除运行时后自动重启（无需手动删文件夹）。
+                </p>
+                <DesktopRuntimePanel />
+              </SettingsCard>
+              <SettingsCard title="口播引擎安装向导" id="settings-heygem-wizard">
+                <p className="mb-2 text-xs text-[var(--muted)]">
+                  Docker → 夸克加速包（按显卡）→ 自动加载镜像并启动。安装包体积不含镜像。
+                </p>
+                <HeyGemInstallWizard />
+              </SettingsCard>
+              <SettingsCard title="网盘加速 · 夸克（免费线）" id="settings-quark">
+                <p className="mb-2 text-xs text-[var(--muted)]">
+                  无外网时用夸克下载大包。口播引擎按显卡分「通用 / RTX50」两包；通用组件与显卡无关。也可在上方向导中完成口播安装。
+                </p>
+                <QuarkAccelPanel />
+              </SettingsCard>
+              {needsLocalEnv && (
+                <SettingsCard title="本机环境 · GPU 与模型" id="settings-env">
+                  <p className="text-xs text-[var(--muted)]">
+                    仅在步骤选择「本地」时显示。云端引擎不需要本机模型安装。
+                  </p>
+                  <ModelSetupPanel
+                    currentEngine={settings.tts_mode === 'local' ? settings.tts_engine : undefined}
+                    onRefresh={onSaved}
+                    defaultOpen={focusSection === 'env'}
+                  />
+                </SettingsCard>
+              )}
+              {showWorkers && (
+                <SettingsCard title="常驻加速 · Worker" id="settings-workers">
+                  <p className="text-xs text-[var(--muted)]">
+                    仅本地步骤需要。常驻会预加载模型到内存以提速，关闭即释放。
+                  </p>
+                  {showTtsWorker && (
+            <WorkerToggle
+                  name="IndexTTS2 配音引擎"
+                  desc="常驻会把模型留在 GPU/内存里加速下次合成；不用时请关掉以释放显存。软件默认不在启动时偷偷加载。"
+                  state={ttsWorker}
+                  busy={workerBusy}
+                  onToggle={async () => {
+                        if (!ttsWorker) return
+                        setWorkerBusy('tts')
+                        try {
+                          if (ttsWorker.running) await api.ttsWorkerStop()
+                          else await api.ttsWorkerStart()
+                          setTtsWorker(await api.ttsWorkerStatus())
+                        } finally {
+                          setWorkerBusy('')
+                        }
+                      }}
+                    />
+                  )}
+                  {showFunasrWorker && (
+                    <WorkerToggle
+                      name="FunASR 语音转写 (SenseVoice)"
+                      desc="常驻约占 500MB 内存 · 转写从 ~22s 降到 ~0.2s"
+                      state={funasrWorker}
+                      busy={workerBusy}
+                      onToggle={async () => {
+                        if (!funasrWorker) return
+                        setWorkerBusy('funasr')
+                        try {
+                          if (funasrWorker.running) {
+                            await api.funasrWorkerStop()
+                          } else {
+                            const res = await api.funasrWorkerStart()
+                            if (!res.ok || !res.running) {
+                              window.alert(
+                                res.message ||
+                                  'FunASR 常驻启动失败。请确认已安装 torch：tools\\FunASR\\.venv\\Scripts\\python.exe -m pip install torch torchaudio',
+                              )
+                            }
+                          }
+                          setFunasrWorker(await api.funasrWorkerStatus())
+                        } catch (e) {
+                          window.alert(e instanceof Error ? e.message : String(e))
+                        } finally {
+                          setWorkerBusy('')
+                        }
+                      }}
+                    />
+                  )}
+                </SettingsCard>
+              )}
+            </>
+          )}
+
+          {tab === 'about' && (
+            <SettingsCard title="关于我们" id="settings-about">
             <div className="flex gap-4">
               <img
                 src="/app-icon.png"
@@ -684,20 +759,24 @@ export function SettingsModal({
               </p>
             </div>
           </SettingsCard>
+          )}
+
           {error && <p className="text-sm text-red-400">{error}</p>}
         </div>
         <div className="flex justify-end gap-2 border-t border-[var(--border)] px-5 py-4">
           <button type="button" onClick={onClose} className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm">
-            取消
+            {tab === 'engines' ? '取消' : '关闭'}
           </button>
-          <button
-            type="button"
-            disabled={loading}
-            onClick={save}
-            className="btn-primary rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50"
-          >
-            {loading ? '保存中…' : '保存并生效'}
-          </button>
+          {tab === 'engines' && (
+            <button
+              type="button"
+              disabled={loading}
+              onClick={save}
+              className="btn-primary rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50"
+            >
+              {loading ? '保存中…' : '保存并生效'}
+            </button>
+          )}
         </div>
       </div>
     </div>

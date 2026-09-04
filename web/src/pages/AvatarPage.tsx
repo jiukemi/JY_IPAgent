@@ -15,6 +15,7 @@ import {
   type PreviewAspect,
 } from '../components/PhonePreviewColumn'
 import { PhoneFitVideo } from '../components/PhonePreviewFrame'
+import { InAppVideoTheater } from '../components/InAppVideoTheater'
 import { ActionBtn, Panel } from './ScriptPage'
 
 type Props = { session: SessionSnapshot; onUpdate: (s: SessionSnapshot) => void }
@@ -123,6 +124,9 @@ export function AvatarPage({ session, onUpdate }: Props) {
   /** User-selected target aspect for preview / guidance (HeyGem follows reference video). */
   const [targetAspect, setTargetAspect] = useState<PreviewAspect>('9:16')
   const [avatarAspect, setAvatarAspect] = useState<PreviewAspect | null>(null)
+  const [theaterOpen, setTheaterOpen] = useState(false)
+  const [previewBust, setPreviewBust] = useState<number | null>(null)
+  const [previewWarming, setPreviewWarming] = useState(false)
 
   const probeVideoAspect = useCallback((url: string) => {
     if (!url) {
@@ -493,7 +497,35 @@ export function AvatarPage({ session, onUpdate }: Props) {
     return () => window.removeEventListener('agent:session-refresh', onRefresh)
   }, [session.path, onUpdate])
 
-  const video = mediaUrl(selectedLipsyncPath || session.lipsync_video, session.lipsync_mtime)
+  const lipsyncPath = selectedLipsyncPath || session.lipsync_video || null
+
+  useEffect(() => {
+    if (!lipsyncPath) {
+      setPreviewBust(null)
+      setPreviewWarming(false)
+      return
+    }
+    let cancelled = false
+    setPreviewWarming(true)
+    void api
+      .prepareSessionMedia(lipsyncPath)
+      .then((res) => {
+        if (cancelled) return
+        // Bust URL after optimize so player reloads streamable file
+        setPreviewBust(res.optimized ? Date.now() : session.lipsync_mtime ?? Date.now())
+      })
+      .catch(() => {
+        if (!cancelled) setPreviewBust(session.lipsync_mtime ?? Date.now())
+      })
+      .finally(() => {
+        if (!cancelled) setPreviewWarming(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [lipsyncPath, session.lipsync_mtime, session.path])
+
+  const video = lipsyncPath ? mediaUrl(lipsyncPath, previewBust ?? session.lipsync_mtime) : null
 
   // Sync target aspect from HeyGem reference video when known (user can still override).
   useEffect(() => {
@@ -912,11 +944,18 @@ export function AvatarPage({ session, onUpdate }: Props) {
 
         <PhonePreviewColumn aspect="9:16">
           <PhonePreviewSlot
-            label={targetAspect === '16:9' ? '口播成片 · 横屏素材（9:16 框内自适应）' : '口播成片 · 竖屏'}
+            label={
+              previewWarming
+                ? '口播成片 · 正在优化历史视频…'
+                : targetAspect === '16:9'
+                  ? '口播成片 · 横屏素材（9:16 框内自适应）'
+                  : '口播成片 · 竖屏'
+            }
             aspect="9:16"
+            onExpand={video ? () => setTheaterOpen(true) : undefined}
           >
             {video ? (
-              <PhoneFitVideo key={video} src={video} controls />
+              <PhoneFitVideo key={video} src={video} controls preload="auto" />
             ) : (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 px-4 text-center text-xs text-[var(--muted)]">
                 <span className="text-2xl opacity-40">▶</span>
@@ -974,13 +1013,34 @@ export function AvatarPage({ session, onUpdate }: Props) {
           )}
 
           {video && (
-            <a
-              href={video}
-              download
-              className="mx-auto block w-full max-w-[280px] rounded-lg border border-[var(--border)] px-3 py-1.5 text-center text-xs hover:bg-[var(--panel)]"
-            >
-              导出口播视频
-            </a>
+            <div className="mx-auto flex w-full max-w-[280px] flex-col gap-1.5">
+              <button
+                type="button"
+                className="w-full rounded-lg border border-[var(--border)] px-3 py-1.5 text-center text-xs hover:bg-[var(--panel)]"
+                onClick={() => {
+                  const desktop = (
+                    window as unknown as {
+                      agentDesktop?: { openPath?: (p: string) => Promise<{ ok: boolean; message?: string }> }
+                    }
+                  ).agentDesktop
+                  const local = selectedLipsyncPath || session.lipsync_video || ''
+                  if (desktop?.openPath && local) {
+                    void desktop.openPath(local)
+                    return
+                  }
+                  window.open(video, '_blank')
+                }}
+              >
+                系统播放器打开
+              </button>
+              <a
+                href={video}
+                download
+                className="block w-full rounded-lg border border-[var(--border)] px-3 py-1.5 text-center text-xs hover:bg-[var(--panel)]"
+              >
+                导出口播视频
+              </a>
+            </div>
           )}
         </PhonePreviewColumn>
       </div>
@@ -1017,6 +1077,13 @@ export function AvatarPage({ session, onUpdate }: Props) {
                 ? '选择肖像图片'
                 : '选择素材'
         }
+      />
+
+      <InAppVideoTheater
+        open={theaterOpen && !!video}
+        src={video || ''}
+        title="口播成片 · 应用内全屏"
+        onClose={() => setTheaterOpen(false)}
       />
 
       <AlertModal

@@ -27,21 +27,16 @@ export function PhonePreviewSlot({ label, note, aspect = '9:16', onExpand, child
           <button
             type="button"
             onClick={onExpand}
-            className="text-[10px] text-[var(--accent)] underline"
+            className="rounded border border-[var(--accent)]/40 px-2 py-0.5 text-[10px] font-medium text-[var(--accent)] hover:bg-[var(--select-bg)]"
+            title="在软件窗口内放大预览（非系统全屏）"
           >
-            弹框放大
+            应用内全屏
           </button>
         )}
       </div>
       <div className={`mx-auto w-full ${landscape ? 'max-w-[360px]' : 'max-w-[280px]'}`}>
-        {/* Must be a div (not disabled button) so children can receive drag/mouse events */}
-        {onExpand ? (
-          <button type="button" onClick={onExpand} className={`${frameClass} cursor-zoom-in text-left hover:brightness-110`}>
-            {children}
-          </button>
-        ) : (
-          <div className={frameClass}>{children}</div>
-        )}
+        {/* Keep a div so nested <video controls> stay clickable; expand via the header button */}
+        <div className={frameClass}>{children}</div>
       </div>
       {note && <p className="text-[10px] leading-relaxed text-[var(--muted)]">{note}</p>}
     </div>

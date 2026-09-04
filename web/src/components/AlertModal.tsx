@@ -1,9 +1,16 @@
+import { createPortal } from 'react-dom'
+
 type Props = {
   open: boolean
   title: string
   message: string
   variant?: 'error' | 'warning' | 'success' | 'info'
   onClose: () => void
+  /** When set, shows Cancel + confirm instead of single 「知道了」 */
+  confirmLabel?: string
+  cancelLabel?: string
+  onConfirm?: () => void
+  confirmBusy?: boolean
 }
 
 const panelStyles = {
@@ -62,20 +69,30 @@ function renderMessage(message: string, bodyClass: string) {
   )
 }
 
-export function AlertModal({ open, title, message, variant = 'info', onClose }: Props) {
-  if (!open) return null
+export function AlertModal({
+  open,
+  title,
+  message,
+  variant = 'info',
+  onClose,
+  confirmLabel,
+  cancelLabel = '取消',
+  onConfirm,
+  confirmBusy = false,
+}: Props) {
+  if (!open || typeof document === 'undefined') return null
 
-  return (
+  const isConfirm = Boolean(confirmLabel && onConfirm)
+
+  return createPortal(
     <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]"
-      onClick={onClose}
+      className="fixed inset-0 z-[80] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]"
       role="presentation"
     >
       <div
         role="alertdialog"
         aria-labelledby="alert-title"
         aria-modal="true"
-        onClick={(e) => e.stopPropagation()}
         className={`w-full max-w-lg rounded-2xl border p-5 shadow-2xl ${panelStyles[variant]}`}
       >
         <div className="flex items-start gap-3">
@@ -89,17 +106,39 @@ export function AlertModal({ open, title, message, variant = 'info', onClose }: 
             <div className="mt-3">{renderMessage(message, bodyStyles[variant])}</div>
           </div>
         </div>
-        <div className="mt-5 flex justify-end">
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-primary rounded-lg px-5 py-2 text-sm font-medium"
-          >
-            知道了
-          </button>
+        <div className="mt-5 flex justify-end gap-2">
+          {isConfirm ? (
+            <>
+              <button
+                type="button"
+                disabled={confirmBusy}
+                onClick={onClose}
+                className="rounded-lg border border-[var(--border)] px-4 py-2 text-sm text-[var(--muted)] hover:bg-[var(--bg)] disabled:opacity-50"
+              >
+                {cancelLabel}
+              </button>
+              <button
+                type="button"
+                disabled={confirmBusy}
+                onClick={() => onConfirm?.()}
+                className="rounded-lg border border-red-700/50 bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50"
+              >
+                {confirmBusy ? '处理中…' : confirmLabel}
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={onClose}
+              className="btn-primary rounded-lg px-5 py-2 text-sm font-medium"
+            >
+              知道了
+            </button>
+          )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   )
 }
 

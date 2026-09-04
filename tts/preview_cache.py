@@ -115,11 +115,14 @@ def get_preview_path(uid: str) -> str | None:
         return None
 
     if uid.startswith("clone:"):
-        entry = get_voice_entry(uid)
-        if entry and entry.reference_wav:
-            ref = Path(entry.reference_wav)
-            return str(ref) if ref.exists() else None
-        return None
+        # 直接读音色库，避免每次重建整表目录
+        from tts.voices import get_voice
+
+        voice = get_voice(uid[len("clone:") :])
+        if not voice:
+            return None
+        ref = Path(str(voice.get("reference_wav") or ""))
+        return str(ref) if ref.is_file() else None
 
     path = preview_path(uid)
     if path.exists() and path.stat().st_size > PREVIEW_MIN_BYTES:

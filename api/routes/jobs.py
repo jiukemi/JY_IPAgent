@@ -30,7 +30,8 @@ def enqueue(body: EnqueueBody) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"不支持的任务类型: {body.type}")
     session = ensure_session_dir(body.session_path)
     payload = dict(body.payload or {})
-    payload.setdefault("session_path", str(session.resolve()))
+    # Always absolute — frontend may send relative paths that break UI path matching
+    payload["session_path"] = str(session.resolve())
     try:
         result = enqueue_job(
             session,

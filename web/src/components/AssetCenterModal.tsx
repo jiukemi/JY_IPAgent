@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api } from '../api/client'
+import { api, playableUrl } from '../api/client'
 import { HyperFrameThemePicker, type HyperAspectMeta, type HyperLayoutMeta, type HyperThemeMeta } from './HyperFrameThemePicker'
 import { StylePackFields, type StylePackOption } from './StylePackFields'
 
@@ -11,6 +11,8 @@ type AssetItem = {
   asset_type: string
   kind: 'file' | 'url'
   preview_url?: string | null
+  local_path?: string | null
+  path?: string
   url?: string
   bgm_id?: string
   mood?: string
@@ -489,6 +491,8 @@ function AvatarGroupPanel({
       name: string
       source_kind: string
       preview_url: string
+      thumb_url?: string
+      media_url?: string
       supports_heygem?: boolean
       supports_sadtalker?: boolean
     }[]
@@ -575,39 +579,38 @@ function AvatarGroupPanel({
             return (
               <div key={a.id} className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
                 <div className="mb-2 flex aspect-video items-center justify-center overflow-hidden rounded-lg bg-[var(--panel)]">
-                  {isVideo && a.preview_url ? (
+                  {a.thumb_url || (a.source_kind !== 'video' && a.preview_url) ? (
                     <button
                       type="button"
                       className="group relative h-full w-full"
                       onClick={() => setViewId(a.id)}
-                      title="查看原视频"
+                      title={isVideo ? '查看原视频' : '查看原图'}
                     >
-                      <video
+                      <img
+                        src={a.thumb_url || a.preview_url}
+                        alt=""
                         className="max-h-full max-w-full object-contain"
-                        src={a.preview_url}
-                        muted
-                        playsInline
-                        preload="metadata"
-                        onMouseEnter={(e) => {
-                          void e.currentTarget.play().catch(() => {})
-                        }}
-                        onMouseLeave={(e) => {
-                          e.currentTarget.pause()
-                          e.currentTarget.currentTime = 0
+                        loading="lazy"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none'
                         }}
                       />
                       <span className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/25 opacity-0 transition group-hover:opacity-100">
                         <span className="rounded-full bg-black/60 px-3 py-1 text-[11px] text-white">
-                          查看原视频
+                          {isVideo ? '查看原视频' : '查看大图'}
                         </span>
                       </span>
                     </button>
-                  ) : a.preview_url ? (
-                    <button type="button" className="h-full w-full" onClick={() => setViewId(a.id)}>
-                      <img src={a.preview_url} alt="" className="max-h-full max-w-full object-contain" />
-                    </button>
                   ) : (
-                    <span className="text-2xl opacity-50">🧑</span>
+                    <button
+                      type="button"
+                      className="flex h-full w-full flex-col items-center justify-center gap-1 text-[11px] text-[var(--muted)]"
+                      onClick={() => setViewId(a.id)}
+                      title={isVideo ? '查看原视频' : '查看原图'}
+                    >
+                      <span className="text-2xl opacity-50">{isVideo ? '▶' : '🧑'}</span>
+                      <span>{isVideo ? '点击查看原视频' : '点击查看'}</span>
+                    </button>
                   )}
                 </div>
                 <p className="truncate text-xs font-medium">{a.name}</p>
@@ -642,12 +645,10 @@ function AvatarGroupPanel({
       {viewing && (
         <div
           className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4"
-          onClick={() => setViewId(null)}
           role="presentation"
         >
           <div
             className="relative w-full max-w-3xl rounded-xl border border-[var(--border)] bg-[var(--panel)] p-3 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-label={viewing.name}
           >
@@ -668,14 +669,17 @@ function AvatarGroupPanel({
             </div>
             {viewing.source_kind === 'video' ? (
               <video
-                src={viewing.preview_url}
+                src={viewing.media_url || viewing.preview_url}
+                poster={viewing.thumb_url}
                 controls
                 autoPlay
+                playsInline
+                preload="auto"
                 className="max-h-[70vh] w-full rounded-lg bg-black"
               />
             ) : (
               <img
-                src={viewing.preview_url}
+                src={viewing.media_url || viewing.preview_url}
                 alt={viewing.name}
                 className="mx-auto max-h-[70vh] max-w-full rounded-lg object-contain"
               />
@@ -714,16 +718,16 @@ function AssetCard({
     await onChanged()
   }
 
-  const videoSrc =
-    item.asset_type === 'video' && item.kind === 'file' && item.preview_url
-      ? item.preview_url
-      : null
+  const mediaSrc = playableUrl(item.preview_url, {
+    localPath: item.local_path || item.path,
+  })
+  const videoSrc = item.asset_type === 'video' && item.kind === 'file' && mediaSrc ? mediaSrc : null
 
   return (
     <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
       <div className="mb-2 flex aspect-video items-center justify-center overflow-hidden rounded-lg bg-[var(--panel)]">
-        {item.asset_type === 'icon' && item.preview_url ? (
-          <img src={item.preview_url} alt="" className="max-h-full max-w-full object-contain" />
+        {item.asset_type === 'icon' && mediaSrc ? (
+          <img src={mediaSrc} alt="" className="max-h-full max-w-full object-contain" />
         ) : videoSrc ? (
           <button
             type="button"
@@ -738,7 +742,8 @@ function AssetCard({
               playsInline
               preload="metadata"
               onMouseEnter={(e) => {
-                void e.currentTarget.play().catch(() => {})
+                const el = e.currentTarget
+                void el.play().catch(() => {})
               }}
               onMouseLeave={(e) => {
                 e.currentTarget.pause()
@@ -752,10 +757,10 @@ function AssetCard({
         ) : item.asset_type === 'video' ? (
           <span className="text-2xl opacity-50">🎬</span>
         ) : item.asset_type === 'audio' ? (
-          item.preview_url ? (
+          mediaSrc ? (
             <div className="flex w-full flex-col items-center gap-2 px-2">
               <span className="text-2xl opacity-60">🎵</span>
-              <audio controls className="w-full" src={item.preview_url} preload="metadata" />
+              <audio controls className="w-full" src={mediaSrc} preload="auto" />
             </div>
           ) : (
             <span className="text-[11px] text-[var(--muted)]">未就绪</span>
@@ -767,12 +772,10 @@ function AssetCard({
       {videoOpen && videoSrc && (
         <div
           className="fixed inset-0 z-[80] flex items-center justify-center bg-black/70 p-4"
-          onClick={() => setVideoOpen(false)}
           role="presentation"
         >
           <div
             className="relative w-full max-w-3xl rounded-xl border border-[var(--border)] bg-[var(--panel)] p-3 shadow-2xl"
-            onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-label={item.name}
           >

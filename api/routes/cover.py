@@ -342,13 +342,15 @@ def suggest(body: SuggestBody) -> dict:
         "1. title：封面主标题，6-14 字，有冲击力、悬念或数字\n"
         "2. subtitle：封面副标题，4-12 字，补充钩子\n"
         "3. description：发布简介，80-180 字，口语化，可带 1-2 个 emoji，结尾引导互动\n"
-        "4. topics：3-6 个话题标签（不要带 #）\n"
+        "4. topics：3-5 个话题标签（不要带 #；短视频平台通常最多 5 个）\n"
         '严格返回 JSON：{"title":"...","subtitle":"...","description":"...","topics":["..."]}，不要多余文字。'
     )
     user = f"口播文案：\n{script[:2000]}\n\n请生成标题、副标题、简介与话题标签。"
     try:
         raw = chat_completion(cfg, block="rewrite", system=system, user=user, temperature=0.75)
         import re
+
+        from workflow.session import normalize_publish_topics
 
         m = re.search(r"\{.*\}", raw, re.DOTALL)
         if m:
@@ -358,14 +360,7 @@ def suggest(body: SuggestBody) -> dict:
         title = str(data.get("title", "")).strip()
         subtitle = str(data.get("subtitle", "")).strip()
         description = str(data.get("description", "")).strip()
-        topics_raw = data.get("topics") or []
-        if isinstance(topics_raw, str):
-            topics = [t.strip().lstrip("#") for t in topics_raw.replace("，", ",").split(",") if t.strip()]
-        elif isinstance(topics_raw, list):
-            topics = [str(t).strip().lstrip("#") for t in topics_raw if str(t).strip()]
-        else:
-            topics = []
-        topics = topics[:8]
+        topics = normalize_publish_topics(data.get("topics") or [])
         saved = False
         if body.save and (body.session_path or "").strip():
             from workflow.session import save_publish_copy

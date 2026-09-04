@@ -95,11 +95,12 @@ def save_voice(
     upload_copy = dest_dir / f"upload{ext}"
     shutil.copy2(src, upload_copy)
 
+    # 存盘时统一转成 mono 22.05kHz wav，后续配音/试听直接用，不再每次 ffmpeg
     dest_wav = dest_dir / "reference.wav"
-    converted = False
+    sample_rate = 22050
     try:
         from pipeline import ensure_ffmpeg
-        from tts.engine import convert_to_wav
+        from tts.engine import _wav_ready, convert_to_wav
 
         try:
             from workflow.app_config import load_cfg
@@ -107,25 +108,27 @@ def save_voice(
             ffmpeg_bin = ensure_ffmpeg(load_cfg()["paths"].get("ffmpeg", "ffmpeg"))
         except Exception:
             ffmpeg_bin = ensure_ffmpeg("ffmpeg")
-        convert_to_wav(ffmpeg_bin, upload_copy, dest_wav, sample_rate=22050)
-        converted = dest_wav.is_file() and dest_wav.stat().st_size > 100
-    except Exception:
-        converted = False
 
-    if not converted:
-        if ext == ".wav":
-            if dest_wav.exists():
-                dest_wav.unlink(missing_ok=True)
-            upload_copy.replace(dest_wav)
+        if _wav_ready(upload_copy, sample_rate):
+            if upload_copy.resolve() != dest_wav.resolve():
+                if dest_wav.exists():
+                    dest_wav.unlink(missing_ok=True)
+                upload_copy.replace(dest_wav)
         else:
-            dest_wav = upload_copy
+            convert_to_wav(ffmpeg_bin, upload_copy, dest_wav, sample_rate=sample_rate)
+            if not dest_wav.is_file() or dest_wav.stat().st_size < 100:
+                raise RuntimeError("ffmpeg 转换后文件无效")
+            if upload_copy.exists() and upload_copy.resolve() != dest_wav.resolve():
+                upload_copy.unlink(missing_ok=True)
+    except Exception as exc:
+        shutil.rmtree(dest_dir, ignore_errors=True)
+        raise ValueError(
+            f"参考音频无法转成标准 wav（请用 wav/mp3/m4a，或检查本机 ffmpeg）：{exc}"
+        ) from exc
 
     if not dest_wav.is_file() or dest_wav.stat().st_size < 100:
         shutil.rmtree(dest_dir, ignore_errors=True)
         raise ValueError("参考音频无效或过短，请上传/录制至少 3 秒的清晰人声")
-
-    if converted and upload_copy.exists() and upload_copy != dest_wav:
-        upload_copy.unlink(missing_ok=True)
 
     entry = {
         "id": vid,
@@ -134,6 +137,7 @@ def save_voice(
         "prompt_text": (prompt_text or "").strip(),
         "backend": (backend or "indextts").lower(),
         "source_type": source_type or "",
+        "sample_rate": sample_rate,
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
     data = _load_index()

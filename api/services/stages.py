@@ -675,6 +675,12 @@ def run_lipsync(
             on_progress=progress,
         )
     video_path = str(Path(final).resolve())
+    try:
+        from workflow.mp4_faststart import ensure_mp4_faststart
+
+        video_path = str(ensure_mp4_faststart(video_path).resolve())
+    except Exception:
+        pass
     set_selected_lipsync_path(str(session), video_path)
     model_labels = {
         "heygem": "HeyGem",

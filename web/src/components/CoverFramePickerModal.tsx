@@ -86,14 +86,12 @@ export function CoverFramePickerModal({
   return (
     <div
       className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 p-4 backdrop-blur-[2px]"
-      onClick={onClose}
       role="presentation"
     >
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="cover-frame-picker-title"
-        onClick={(e) => e.stopPropagation()}
         className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl"
       >
         <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-4 py-3">

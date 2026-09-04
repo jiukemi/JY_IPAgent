@@ -16,7 +16,7 @@ paths:
 deployment:
   mode: local
   steps:
-    script: cloud
+    script: local
     tts: local
     avatar: local
     publish: local
@@ -27,7 +27,7 @@ deployment:
     publish_provider: volcengine
   engines:
     script:
-      local: local_whisper
+      local: funasr
       cloud: cloud_17zhiling
     tts:
       local: indextts
@@ -72,8 +72,8 @@ script:
     parse_api_header: "Authorization"
     parse_timeout_sec: 120
     asr_async_timeout_sec: 300
-    ui_preview_clip_sec: 0       # 0=页面播放完整视频；>0 时大文件仅截取前 N 秒轻量预览
-    ui_preview_max_mb: 30
+    ui_preview_clip_sec: 90      # 页面只播本地短预览；完整文件下载后仅用于 ASR（0=播完整本地文件）
+    ui_preview_max_mb: 30        # 超过此大小也会截取预览片段
     # 旧字段（兼容）：parse_provider / parse_api_key 会映射到上面两块
     rewrite:
       base_url: "https://api.deepseek.com/v1"
@@ -105,7 +105,8 @@ tts:
 
 indextts:
   model_dir: "checkpoints"
-  worker_enabled: true          # warm worker: load IndexTTS2 once per app session
+  worker_enabled: true          # 配音时用常驻进程（首次合成会加载到 GPU）
+  worker_autostart: false       # true=打开软件就占 GPU；默认 false，避免「没操作却爆显存」
   use_fp16: true
   use_emo_text: true
   clone_use_emo_text: true   # 克隆音色填写「情感风格」时叠加 emo_text

@@ -223,29 +223,36 @@ def resolve_share_cdn(
 
     if video_url and download_video and cloud.get("download_cdn", True) is not False:
         dest = work_dir / "reference_from_cdn.mp4"
+        _emit(on_progress, 0.45, "下载对标视频到本地（仅此一次）…")
         try:
-            _emit(on_progress, 0.45, "下载对标视频（预览）…")
             download_cdn_video(video_url, dest, on_progress=on_progress)
-            local_video = str(dest.resolve())
-            ui_preview = _maybe_build_ui_preview(cfg, dest, on_progress=on_progress)
-            size_mb = dest.stat().st_size / (1024 * 1024)
-            try:
-                probe = ffprobe_bin(ensure_ffmpeg(cfg.get("paths", {}).get("ffmpeg", "ffmpeg")))
-                mins = media_duration(probe, dest) / 60
-                logs.append(
-                    f"[①-A CDN] 本地预览已保存 · {size_mb:.0f}MB · 时长≈{mins:.0f}分钟"
-                )
-                if mins >= 10:
-                    logs.append(
-                        "[提示] 视频较长：①-B 本地 Whisper 可能需 20–60 分钟；"
-                        "可先确认右侧预览，或改用云端 ASR（config transcript.provider）"
-                    )
-            except Exception:
-                logs.append(f"[①-A CDN] 本地预览已保存 · {size_mb:.0f}MB")
-            if ui_preview and ui_preview != local_video:
-                logs.append("[①-A CDN] 已生成 90 秒轻量预览供页面播放")
         except Exception as exc:
-            logs.append(f"[①-A CDN] 下载跳过: {exc}")
+            raise RuntimeError(
+                f"CDN 直链已解析，但下载到本地失败（不会边播边拉远程）：{exc}\n"
+                "请重试，或改用「上传本地视频」提取。"
+            ) from exc
+        local_video = str(dest.resolve())
+        ui_preview = _maybe_build_ui_preview(cfg, dest, on_progress=on_progress)
+        size_mb = dest.stat().st_size / (1024 * 1024)
+        try:
+            probe = ffprobe_bin(ensure_ffmpeg(cfg.get("paths", {}).get("ffmpeg", "ffmpeg")))
+            mins = media_duration(probe, dest) / 60
+            logs.append(
+                f"[①-A CDN] 已下载到本地 · {size_mb:.0f}MB · 时长≈{mins:.0f}分钟（页面只播本地缓存）"
+            )
+            if mins >= 10:
+                logs.append(
+                    "[提示] 视频较长：①-B 本地 Whisper 可能需 20–60 分钟；"
+                    "可先确认右侧预览，或改用云端 ASR（config transcript.provider）"
+                )
+        except Exception:
+            logs.append(f"[①-A CDN] 已下载到本地 · {size_mb:.0f}MB（页面只播本地缓存）")
+        if ui_preview and ui_preview != local_video:
+            logs.append("[①-A CDN] 已生成轻量预览片段供页面播放（完整文件仅用于 ASR）")
+    elif video_url and not download_video:
+        logs.append("[①-A CDN] 已跳过下载（download_video=false）；页面不会直接播远程 CDN")
+    elif video_url and cloud.get("download_cdn", True) is False:
+        logs.append("[①-A CDN] download_cdn=false，未落盘；请改为 true，避免反复读远程链接")
 
     result = ExtractResult(
         text="",
@@ -394,14 +401,38 @@ def download_cdn_video(
     *,
     on_progress: ProgressFn | None = None,
     timeout: float = 300.0,
+    referer: str = "",
 ) -> Path:
+    """Download CDN once to a local file. UI / ASR must use this path, not the remote URL."""
     if not video_url:
         raise ValueError("无 CDN 地址可下载")
+    if video_url.startswith(("http://", "https://")) is False:
+        raise ValueError("CDN 地址无效")
     dest.parent.mkdir(parents=True, exist_ok=True)
-    req = urllib.request.Request(
-        video_url,
-        headers={"User-Agent": "Mozilla/5.0 (compatible; AgentBot/1.0)"},
-    )
+    # Platform CDNs often require a browser-like UA + Referer; avoid "live browse" of the URL.
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept": "*/*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    }
+    ref = (referer or "").strip()
+    if not ref:
+        # Best-effort referer from URL host family
+        low = video_url.lower()
+        if any(k in low for k in ("douyin", "bytecdn", "365yg", "douyinvod", "tiktok")):
+            ref = "https://www.douyin.com/"
+        elif any(k in low for k in ("kuaishou", "kwcdn", "gifshow")):
+            ref = "https://www.kuaishou.com/"
+        elif any(k in low for k in ("xiaohongshu", "xhscdn", "sns-video")):
+            ref = "https://www.xiaohongshu.com/"
+        elif "bili" in low:
+            ref = "https://www.bilibili.com/"
+    if ref:
+        headers["Referer"] = ref
+    req = urllib.request.Request(video_url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         total = int(resp.headers.get("Content-Length") or 0)
         chunk_size = 1024 * 256
@@ -415,8 +446,9 @@ def download_cdn_video(
                 downloaded += len(chunk)
                 if total > 0 and on_progress:
                     frac = downloaded / total
-                    _emit(on_progress, 0.45 + 0.25 * frac, "下载对标视频…")
+                    _emit(on_progress, 0.45 + 0.25 * frac, "下载对标视频到本地…")
     if dest.stat().st_size < 1024:
+        dest.unlink(missing_ok=True)
         raise RuntimeError("CDN 下载失败或文件过小，链接可能已过期")
     return dest
 
@@ -429,18 +461,35 @@ def _maybe_build_ui_preview(
     max_bytes: int | None = None,
     clip_sec: int | None = None,
 ) -> str:
-    """Build a short clip for UI preview when configured; 0 clip_sec = always use full file."""
+    """Build a short local clip for UI preview. Full file stays for ASR.
+
+    Default clip_sec=90 so the page never scrub-streams a huge mp4 through the API.
+    """
     src = src.resolve()
     if not src.is_file():
         return ""
     cloud_cfg = (cfg.get("script") or {}).get("cloud") or {}
     if clip_sec is None:
-        clip_sec = int(cloud_cfg.get("ui_preview_clip_sec", 0))
+        # 0 = always use full file (legacy); default 90s light preview for smoothness
+        clip_sec = int(cloud_cfg.get("ui_preview_clip_sec", 90))
     if max_bytes is None:
         max_mb = int(cloud_cfg.get("ui_preview_max_mb", 30))
         max_bytes = max_mb * 1024 * 1024
-    if clip_sec <= 0 or src.stat().st_size <= max_bytes:
+    if clip_sec <= 0:
         return str(src)
+
+    # Prefer a capped local clip whenever clip_sec > 0 (page must not scrub the full download).
+    # Keep this OFF the snapshot/API path — only call during CDN download step.
+    size = src.stat().st_size
+    # Small/short files: serve as-is immediately (no ffmpeg wait).
+    if size <= max_bytes:
+        try:
+            probe = ffprobe_bin(ensure_ffmpeg(cfg.get("paths", {}).get("ffmpeg", "ffmpeg")))
+            if media_duration(probe, src) <= float(clip_sec) + 0.5:
+                return str(src)
+        except Exception:
+            return str(src)
+
     ui = src.parent / "reference_ui_preview.mp4"
     if ui.is_file() and ui.stat().st_mtime >= src.stat().st_mtime:
         return str(ui.resolve())

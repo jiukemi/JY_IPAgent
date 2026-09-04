@@ -27,12 +27,10 @@ export function SessionModal({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 p-4 backdrop-blur-[2px]"
-      onClick={onClose}
       role="presentation"
     >
       <div
         className="ui-card flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby="session-modal-title"

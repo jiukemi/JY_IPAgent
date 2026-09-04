@@ -110,6 +110,7 @@ def _bgm_virtual_items() -> list[dict]:
             continue
         ready = bool(row.get("ready"))
         preview = row.get("preview_url") if ready else None
+        local_path = row.get("local_path") or row.get("path")
         out.append(
             {
                 "id": f"bgm::{bid}",
@@ -118,6 +119,7 @@ def _bgm_virtual_items() -> list[dict]:
                 "asset_type": "audio",
                 "kind": "file",
                 "preview_url": preview,
+                "local_path": local_path,
                 "url": "",
                 "bgm_id": bid,
                 "mood": row.get("mood") or "",
@@ -135,7 +137,10 @@ def _bgm_virtual_items() -> list[dict]:
 def _item_public(row: dict) -> dict:
     out = dict(row)
     if row.get("kind") == "file" and row.get("path"):
+        p = Path(str(row["path"]))
         out["preview_url"] = f"/api/assets/file?id={row['id']}"
+        if p.is_file():
+            out["local_path"] = str(p.resolve())
     elif row.get("kind") == "url" and row.get("url"):
         out["preview_url"] = row["url"]
     return out

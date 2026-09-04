@@ -5,15 +5,30 @@
  * Packaged runtime (Python/FFmpeg) lives under userData — NOT under Program Files —
  * so first-run download works without admin write permission.
  */
-import { app, BrowserWindow, shell, dialog, Menu, ipcMain, clipboard } from 'electron'
-import { spawn } from 'node:child_process'
+import { app, BrowserWindow, shell, dialog, Menu, ipcMain, clipboard, protocol, net } from 'electron'
+import { execSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import http from 'node:http'
 import { downloadAndLaunchInstaller, openReleasePage } from './updater.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// Must run before app.ready — local disk media without HTTP buffer
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'agent-media',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      bypassCSP: true,
+      corsEnabled: true,
+    },
+  },
+])
 
 function resolveRoot() {
   // Packaged: extraResources → resources/agent
@@ -221,15 +236,73 @@ function inspectRuntime(opts = {}) {
   return info
 }
 
+function mediaAllowRoots() {
+  return [path.join(ROOT, 'output'), path.join(ROOT, 'data'), runtimeDir()].map((p) => path.resolve(p))
+}
+
+function isAllowedMediaPath(filePath) {
+  const resolved = path.resolve(filePath)
+  return mediaAllowRoots().some((root) => resolved === root || resolved.startsWith(root + path.sep))
+}
+
+/** Serve session / avatar / asset files straight from disk (Range-capable via net.fetch). */
+function registerMediaProtocol() {
+  protocol.handle('agent-media', (request) => {
+    try {
+      const u = new URL(request.url)
+      const raw = u.searchParams.get('p') || ''
+      if (!raw) return new Response('missing path', { status: 400 })
+      const filePath = path.resolve(decodeURIComponent(raw))
+      if (!isAllowedMediaPath(filePath)) {
+        return new Response('forbidden', { status: 403 })
+      }
+      if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+        return new Response('not found', { status: 404 })
+      }
+      return net.fetch(pathToFileURL(filePath).href)
+    } catch (err) {
+      return new Response(err instanceof Error ? err.message : String(err), { status: 500 })
+    }
+  })
+}
+
 function killBackend() {
   if (pyProc && !pyProc.killed) {
+    const pid = pyProc.pid
     try {
-      pyProc.kill()
+      if (process.platform === 'win32' && pid) {
+        spawn('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+      } else {
+        pyProc.kill()
+      }
     } catch {
       /* ignore */
     }
   }
   pyProc = null
+}
+
+/** Kill leftover server.py still listening on the app port range (stale routes → blank thumbs). */
+function killOrphanAgentServers() {
+  if (process.platform !== 'win32') return
+  const script = [
+    'foreach ($port in 7860..7890) {',
+    '  Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | ForEach-Object {',
+    '    $procId = $_.OwningProcess',
+    '    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction SilentlyContinue',
+    "    if ($p -and $p.CommandLine -match 'server\\.py') { Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue }",
+    '  }',
+    '}',
+  ].join(' ')
+  try {
+    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command ${JSON.stringify(script)}`, {
+      stdio: 'ignore',
+      windowsHide: true,
+      timeout: 20000,
+    })
+  } catch {
+    /* ignore */
+  }
 }
 
 /** Clear runtime folder. Rename-first to dodge Windows file locks, then delete. */
@@ -421,6 +494,23 @@ function registerSplashIpc() {
   })
   ipcMain.handle('desktop:open-release-page', (_e, url) => {
     openReleasePage(url)
+    return { ok: true }
+  })
+  ipcMain.handle('desktop:open-path', async (_e, rawPath) => {
+    const input = typeof rawPath === 'string' ? rawPath.trim() : ''
+    if (!input) return { ok: false, message: '路径为空' }
+    const resolved = path.resolve(input)
+    const allowed = [
+      path.join(ROOT, 'data'),
+      path.join(runtimeDir(), 'data'),
+    ].map((p) => path.resolve(p))
+    const okRoot = allowed.some(
+      (root) => resolved === root || resolved.startsWith(root + path.sep),
+    )
+    if (!okRoot) return { ok: false, message: '只能打开本机数据目录内的文件' }
+    if (!fs.existsSync(resolved)) return { ok: false, message: '文件不存在' }
+    const err = await shell.openPath(resolved)
+    if (err) return { ok: false, message: err }
     return { ok: true }
   })
 }
@@ -686,6 +776,10 @@ function startBackend() {
       mode: 'indeterminate',
       line: `python → ${found.cmd}`,
     })
+    splashSend({ pct: 90, label: '清理旧后端进程…', line: '释放 7860–7890 端口' })
+    killOrphanAgentServers()
+    killBackend()
+
     const childArgs = [...found.args, serverPy]
     pyProc = spawn(found.cmd, childArgs, {
       cwd: ROOT,
@@ -737,16 +831,7 @@ function startBackend() {
       }
     })
 
-    setTimeout(() => {
-      if (!resolved) {
-        waitForHealth(7860, 5000)
-          .then(() => {
-            resolved = true
-            resolve(7860)
-          })
-          .catch(() => {})
-      }
-    }, 3000)
+    // Never attach to a pre-existing :7860 — that may be a stale backend missing thumb routes.
   })
 }
 
@@ -850,6 +935,7 @@ function createWindow(port) {
 
 app.whenReady().then(async () => {
   Menu.setApplicationMenu(null)
+  registerMediaProtocol()
   registerSplashIpc()
   createSplash()
   // Give splash a moment to paint before heavy work
@@ -886,18 +972,10 @@ app.on('window-all-closed', () => {
   if (splashWindow && !splashWindow.isDestroyed() && (!mainWindow || mainWindow.isDestroyed())) {
     return
   }
-  if (pyProc && !pyProc.killed) {
-    pyProc.kill()
-  }
+  killBackend()
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('before-quit', () => {
-  if (pyProc && !pyProc.killed) {
-    try {
-      pyProc.kill()
-    } catch {
-      /* ignore */
-    }
-  }
+  killBackend()
 })

@@ -37,13 +37,14 @@ export function PhonePreviewFrame({
   )
 }
 
-/** 竖屏手机框内播放：横屏素材 letterbox，竖屏素材完整可见 */
+/** 竖屏手机框内播放：横屏素材 letterbox，竖屏素材完整可见；默认不预拉全片 */
 export const PhoneFitVideo = forwardRef<HTMLVideoElement, VideoHTMLAttributes<HTMLVideoElement>>(
-  function PhoneFitVideo({ className = '', playsInline = true, ...rest }, ref) {
+  function PhoneFitVideo({ className = '', playsInline = true, preload = 'none', ...rest }, ref) {
     return (
       <video
         ref={ref}
         playsInline={playsInline}
+        preload={preload}
         className={`${PHONE_FIT_VIDEO_CLASS} ${className}`.trim()}
         {...rest}
       />

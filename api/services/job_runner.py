@@ -508,6 +508,54 @@ def run_avatar_lipsync(
     }
 
 
+def run_script_extract(
+    payload: dict[str, Any],
+    *,
+    on_progress: ProgressCb | None = None,
+) -> dict[str, Any]:
+    from api.services.stages import script_extract_with_progress
+
+    def tick(p: float, msg: str | None = None) -> None:
+        if on_progress:
+            on_progress(p, msg or "")
+
+    data = script_extract_with_progress(
+        str(payload.get("session_path") or ""),
+        str(payload.get("share_url") or ""),
+        str(payload.get("ref_media") or "") or None,
+        tick,
+    )
+    return {"ok": True, **data}
+
+
+def run_subtitle_asr(
+    payload: dict[str, Any],
+    *,
+    on_progress: ProgressCb | None = None,
+) -> dict[str, Any]:
+    from api.services.stages import extract_publish_subtitles
+
+    def tick(p: float, msg: str) -> None:
+        if on_progress:
+            on_progress(p, msg)
+
+    tick(0.05, "准备本地 ASR…")
+    data = extract_publish_subtitles(
+        str(payload.get("session_path") or ""),
+        use_video_audio=_bool(payload.get("use_video_audio"), True),
+        update_script=_bool(payload.get("update_script"), True),
+        subtitle_font_size=int(payload.get("subtitle_font_size") or 16),
+        output_aspect=str(payload.get("output_aspect") or "portrait_9_16"),
+        subtitle_max_chars=(
+            int(payload["subtitle_max_chars"])
+            if payload.get("subtitle_max_chars") is not None
+            else None
+        ),
+    )
+    tick(1.0, "字幕提取完成")
+    return {"ok": True, **data}
+
+
 def dispatch_job(
     job_type: str,
     payload: dict[str, Any],
@@ -526,6 +574,10 @@ def dispatch_job(
         return run_avatar_lipsync(payload, on_progress=on_progress)
     if job_type == "engine_install":
         return run_engine_install(payload, on_progress=on_progress)
+    if job_type == "script_extract":
+        return run_script_extract(payload, on_progress=on_progress)
+    if job_type == "subtitle_asr":
+        return run_subtitle_asr(payload, on_progress=on_progress)
     raise ValueError(f"unsupported job type: {job_type}")
 
 

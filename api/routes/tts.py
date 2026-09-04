@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
-from fastapi import APIRouter, File, Form, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 
 from api.schemas import StageResult, TtsBody, TtsPreviewBody, TtsSettingsPayload, VoiceItem
@@ -24,28 +26,62 @@ from tts.voice_catalog import (
     refresh_catalog,
     selected_label,
 )
-from tts.voices import delete_voice, list_voices, next_default_name
+from tts.voices import delete_voice, get_voice, list_voices, next_default_name
 
 router = APIRouter(prefix="/api", tags=["tts"])
 _tts_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tts")
 
+# 克隆参考音一般很小；列表里直接塞 data URL，点击零延迟本地播
+_CLONE_INLINE_MAX_BYTES = 2_500_000
+
+
+def _clone_audio_data_url(voice_id: str) -> str | None:
+    entry = get_voice(voice_id)
+    if not entry:
+        return None
+    path = Path(str(entry.get("reference_wav") or ""))
+    if not path.is_file():
+        return None
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if size < 100:
+        return None
+    if size > _CLONE_INLINE_MAX_BYTES:
+        return f"/api/voices/{voice_id}/audio"
+    raw = path.read_bytes()
+    b64 = base64.standard_b64encode(raw).decode("ascii")
+    return f"data:audio/wav;base64,{b64}"
+
 
 def _voice_items(entries) -> list[VoiceItem]:
-    return [
-        VoiceItem(
-            uid=e.uid,
-            label=e.card_label,
-            kind="system" if e.uid.startswith("sys:") else "clone",
-            preview_url=(
-                f"/api/files/preview?voice={e.uid}"
-                if get_preview_path(e.uid)
-                else None
-            ),
-            category=getattr(e, "category", "") or "",
-            hint=getattr(e, "hint", "") or "",
+    items: list[VoiceItem] = []
+    for e in entries:
+        preview = None
+        local_path = None
+        if e.uid.startswith("clone:"):
+            preview = _clone_audio_data_url(e.uid[len("clone:") :])
+            disk = get_preview_path(e.uid)
+            if disk:
+                local_path = str(Path(disk).resolve())
+        else:
+            disk = get_preview_path(e.uid)
+            if disk:
+                local_path = str(Path(disk).resolve())
+                preview = f"/api/files/preview?voice={e.uid}"
+        items.append(
+            VoiceItem(
+                uid=e.uid,
+                label=e.card_label,
+                kind="system" if e.uid.startswith("sys:") else "clone",
+                preview_url=preview,
+                local_path=local_path,
+                category=getattr(e, "category", "") or "",
+                hint=getattr(e, "hint", "") or "",
+            )
         )
-        for e in entries
-    ]
+    return items
 
 
 @router.get("/voices/system")
@@ -81,15 +117,32 @@ def default_voice(backend: str | None = None) -> dict:
 def voice_library() -> list[dict]:
     rows: list[dict] = []
     for v in list_voices():
-        uid = f"clone:{v['id']}"
+        vid = v["id"]
+        uid = f"clone:{vid}"
         row = dict(v)
         row["uid"] = uid
-        if get_preview_path(uid):
-            row["preview_url"] = f"/api/files/preview?voice={uid}"
-        else:
-            row["preview_url"] = None
+        row["preview_url"] = _clone_audio_data_url(vid)
+        ref = Path(str(v.get("reference_wav") or ""))
+        row["local_path"] = str(ref.resolve()) if ref.is_file() else None
         rows.append(row)
     return rows
+
+
+@router.get("/voices/{voice_id}/audio")
+def voice_audio(voice_id: str):
+    """Serve saved reference wav directly (fallback when too large to inline)."""
+    vid = (voice_id or "").strip()
+    if vid.startswith("clone:"):
+        vid = vid[len("clone:") :]
+    entry = get_voice(vid)
+    if not entry:
+        raise HTTPException(status_code=404, detail="音色不存在")
+    path = Path(str(entry.get("reference_wav") or ""))
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="参考音文件缺失")
+    from workflow.file_serve import safe_file_response
+
+    return safe_file_response(path, media_type="audio/wav", cache_control="private, max-age=86400")
 
 
 @router.get("/voices/next-name")
@@ -100,7 +153,13 @@ def next_voice_name(source: str = "upload") -> dict:
 
 @router.delete("/voices/{voice_id}")
 def remove_voice(voice_id: str) -> dict:
-    delete_voice(voice_id)
+    vid = (voice_id or "").strip()
+    if vid.startswith("clone:"):
+        vid = vid[len("clone:") :]
+    if not vid:
+        raise HTTPException(status_code=400, detail="缺少音色 ID")
+    if not delete_voice(vid):
+        raise HTTPException(status_code=404, detail="音色不存在或已删除")
     refresh_catalog()
     return {"ok": True}
 
@@ -282,7 +341,9 @@ def voice_preview(voice: str):
             ".webm": "audio/webm",
             ".flac": "audio/flac",
         }.get(ext, "audio/wav")
-        return safe_file_response(p, media_type=media)
+        # 音色参考音落盘后不变；允许短缓存，避免每次试听都重新读盘
+        cache = "private, max-age=600" if (voice or "").startswith("clone:") else "no-store"
+        return safe_file_response(p, media_type=media, cache_control=cache)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="无预览") from exc
 

@@ -251,6 +251,7 @@ def upload_user_bgm(src_path: Path, name: str = "", *, mime: str = "") -> dict:
         "clip_start": 0,
         "duration_sec": duration,
         "preview_url": f"/api/publish/bgm/preview?id={item_id}",
+        "local_path": str(dest.resolve()),
         "user": True,
     }
 
@@ -279,10 +280,65 @@ def delete_user_bgm(bgm_id: str) -> None:
     _save_user_index(kept)
 
 
+def _asset_audio_rows() -> list[dict]:
+    """Audio files uploaded in 素材中心 (音频分组等) — selectable as BGM."""
+    try:
+        from workflow.asset_library import _load
+    except Exception:
+        return []
+    try:
+        data = _load()
+    except Exception:
+        return []
+    out: list[dict] = []
+    for row in data.get("items", []) or []:
+        if row.get("kind") != "file":
+            continue
+        path = Path(str(row.get("path") or ""))
+        if not path.is_file():
+            continue
+        mime = str(row.get("mime") or "").lower()
+        asset_type = str(row.get("asset_type") or "").lower()
+        suffix = path.suffix.lower()
+        is_audio = asset_type == "audio" or mime.startswith("audio/") or suffix in _AUDIO_EXT
+        if not is_audio:
+            continue
+        iid = str(row.get("id") or "").strip()
+        if not iid:
+            continue
+        duration = _probe_duration(path)
+        out.append(
+            {
+                "id": iid,
+                "name": row.get("name") or iid,
+                "mood": "素材中心",
+                "category": "素材",
+                "ready": True,
+                "source": "asset",
+                "clip_start": 0,
+                "duration_sec": duration,
+                "preview_url": f"/api/assets/file?id={iid}",
+                "local_path": str(path.resolve()),
+                "user": True,
+                "from_asset": True,
+            }
+        )
+    out.sort(key=lambda r: str(r.get("name") or ""))
+    return out
+
+
 def resolve_bgm_path(bgm_id: str) -> Path | None:
     bid = (bgm_id or "").strip()
     if not bid or bid.lower() in ("none", "off", ""):
         return None
+    # 素材中心上传的音频（ast_…）
+    if bid.startswith("ast_"):
+        try:
+            from workflow.asset_library import resolve_file
+
+            return resolve_file(bid)
+        except (FileNotFoundError, ValueError, OSError):
+            return None
     user = _user_by_id(bid)
     if user and user.get("file"):
         p = BGM_ROOT / str(user["file"])
@@ -307,9 +363,34 @@ def resolve_bgm_path(bgm_id: str) -> Path | None:
 
 
 def bgm_meta(bgm_id: str) -> dict | None:
-    user = _user_by_id(bgm_id)
+    bid = (bgm_id or "").strip()
+    if bid.startswith("ast_"):
+        path = resolve_bgm_path(bid)
+        if not path:
+            return None
+        name = bid
+        try:
+            from workflow.asset_library import get_item
+
+            item = get_item(bid)
+            name = str(item.get("name") or bid)
+        except Exception:
+            pass
+        duration = _probe_duration(path)
+        return {
+            "id": bid,
+            "name": name,
+            "mood": "素材中心",
+            "category": "素材",
+            "clip_start": 0.0,
+            "trim_sec": float(duration or 75),
+            "duration_sec": duration,
+            "user": True,
+            "from_asset": True,
+        }
+    user = _user_by_id(bid)
     if user:
-        path = resolve_bgm_path(bgm_id)
+        path = resolve_bgm_path(bid)
         duration = user.get("duration_sec")
         if duration is None and path and path.is_file():
             duration = _probe_duration(path)
@@ -374,9 +455,12 @@ def list_bgm_library() -> list[dict]:
                 "clip_start": float(row.get("clip_start") or 0),
                 "duration_sec": duration,
                 "preview_url": f"/api/publish/bgm/preview?id={bid}" if path else None,
+                "local_path": str(path.resolve()) if path and path.is_file() else None,
                 "user": True,
             }
         )
+    # 素材中心「音频」等分组上传的文件，也可在发布页选作 BGM
+    rows.extend(_asset_audio_rows())
     for row in _CATALOG:
         path = BGM_ROOT / f"{row['name']}.mp3"
         meta = manifest_map.get(row["id"], {})
@@ -396,6 +480,7 @@ def list_bgm_library() -> list[dict]:
                 "clip_start": float(row.get("clip_start") or 0),
                 "duration_sec": duration,
                 "preview_url": f"/api/publish/bgm/preview?id={row['id']}" if path.is_file() else None,
+                "local_path": str(path.resolve()) if path.is_file() else None,
                 "user": False,
             }
         )

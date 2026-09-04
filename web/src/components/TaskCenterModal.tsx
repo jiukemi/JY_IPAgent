@@ -33,6 +33,10 @@ function typeLabel(t: string) {
       return '换肤'
     case 'engine_install':
       return '引擎安装'
+    case 'script_extract':
+      return '文案提取'
+    case 'subtitle_asr':
+      return '字幕 ASR'
     default:
       return t
   }
@@ -362,14 +366,12 @@ export function TaskCenterModal() {
       {centerOpen && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]"
-          onClick={() => setCenterOpen(false)}
           role="presentation"
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="task-center-title"
-            onClick={(e) => e.stopPropagation()}
             className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-2xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl"
           >
             <div className="flex items-center justify-between border-b border-[var(--border)] px-5 py-3">

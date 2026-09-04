@@ -27,11 +27,22 @@ try {
   Pop-Location
 }
 
-$out = Join-Path $Root "desktop\dist-installer"
+$outCandidates = @(
+  (Join-Path $Root "desktop\dist-installer-v2"),
+  (Join-Path $Root "desktop\dist-installer")
+)
 Write-Host ""
 Write-Host "======== 完成 ========"
-Get-ChildItem $out -Filter "*Setup-*" -ErrorAction SilentlyContinue | ForEach-Object {
-  Write-Host ("安装包: " + $_.FullName + "  (" + [math]::Round($_.Length/1MB,1) + " MB)")
+$found = $false
+foreach ($out in $outCandidates) {
+  if (-not (Test-Path $out)) { continue }
+  Get-ChildItem $out -Filter "*Setup-*" -ErrorAction SilentlyContinue | ForEach-Object {
+    $found = $true
+    Write-Host ("安装包: " + $_.FullName + "  (" + [math]::Round($_.Length/1MB,1) + " MB)")
+  }
+}
+if (-not $found) {
+  Write-Host "未找到 Setup 安装包，请检查 desktop/dist-installer-v2"
 }
 Write-Host ""
 Write-Host "发给用户时附带说明见 docs/用户手册.md"

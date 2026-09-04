@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, mediaUrl } from '../api/client'
+import { api, mediaUrl, playableUrl } from '../api/client'
 import { FileDropZone } from './FileDropZone'
 import { formatAudioDuration } from './AudioPreviewButton'
 
@@ -165,9 +165,7 @@ export function DubbingSourcePanel({
     recorderRef.current = null
   }
 
-  const exportUrl = selectedPath
-    ? `/api/files/session?path=${encodeURIComponent(selectedPath)}`
-    : null
+  const exportUrl = selectedPath ? mediaUrl(selectedPath) : null
 
   const saveNamed = async () => {
     if (!selectedPath) return
@@ -523,7 +521,7 @@ export function DubbingSourcePanel({
       )}
 
       {(activePreview || previewUrl) && (
-        <audio src={activePreview || previewUrl || undefined} controls className="w-full" />
+        <audio src={activePreview || playableUrl(previewUrl) || undefined} controls className="w-full" preload="auto" />
       )}
 
       <div className="flex flex-wrap items-center gap-2">

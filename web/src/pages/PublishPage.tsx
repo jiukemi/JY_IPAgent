@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { api, mediaUrl } from '../api/client'
+import { api, mediaUrl, playableUrl } from '../api/client'
 import { useJobQueue } from '../context/JobQueueContext'
 import type { SessionSnapshot } from '../types'
 import { CoverEditor, CoverPreviewCanvas, type CoverPreviewBridge } from '../components/CoverEditor'
@@ -9,7 +9,9 @@ import { AssetPickerModal, type PickerAsset } from '../components/AssetPickerMod
 import { LecturerCropModal, type CropBox } from '../components/LecturerCropModal'
 import { PhonePreviewColumn, PhonePreviewSlot, type PreviewAspect } from '../components/PhonePreviewColumn'
 import { PhoneFitVideo } from '../components/PhonePreviewFrame'
+import { InAppVideoTheater } from '../components/InAppVideoTheater'
 import { detectVideoAspectFromUrl, detectVideoDuration, pathsRoughlyEqual } from '../utils/mediaFileMeta'
+import { sameSessionPath } from '../utils/sessionPath'
 import { ActionBtn, Panel, TabBtn } from './ScriptPage'
 
 
@@ -380,6 +382,15 @@ export function PublishPage({ session, onUpdate }: Props) {
         .split(/[,，#\s]+/)
         .map((t) => t.trim())
         .filter(Boolean)
+        .slice(0, 5)
+      if (
+        postTopics
+          .split(/[,，#\s]+/)
+          .map((t) => t.trim())
+          .filter(Boolean).length > 5
+      ) {
+        setPostTopics(topics.join(' '))
+      }
       const res = await api.publishAutoPost({
         session_path: session.path,
         video_path: videoPath || resultVideoPath || undefined,
@@ -473,6 +484,8 @@ export function PublishPage({ session, onUpdate }: Props) {
   const [subtitlePreviewNote, setSubtitlePreviewNote] = useState('')
   const [subtitlePreviewStale, setSubtitlePreviewStale] = useState(false)
   const [previewLightboxOpen, setPreviewLightboxOpen] = useState(false)
+  const [videoTheaterSrc, setVideoTheaterSrc] = useState<string | null>(null)
+  const [videoTheaterTitle, setVideoTheaterTitle] = useState('应用内全屏预览')
   const [rightPreviewTab, setRightPreviewTab] = useState<'mix' | 'lipsync'>('mix')
   const [cuesEdited, setCuesEdited] = useState(false)
   const [enableBgm, setEnableBgm] = useState(false)
@@ -490,7 +503,9 @@ export function PublishPage({ session, onUpdate }: Props) {
       clip_start?: number
       duration_sec?: number
       preview_url: string | null
+      local_path?: string | null
       user?: boolean
+      from_asset?: boolean
     }>
   >([])
   const [bgmUploadBusy, setBgmUploadBusy] = useState(false)
@@ -606,7 +621,16 @@ export function PublishPage({ session, onUpdate }: Props) {
   }, [publishAspect])
 
   useEffect(() => {
-    void api.bgmLibrary().then(setBgmTracks).catch(() => setBgmTracks([]))
+    const loadBgm = () => {
+      void api.bgmLibrary().then(setBgmTracks).catch(() => setBgmTracks([]))
+    }
+    loadBgm()
+    const onFocus = () => loadBgm()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [])
+
+  useEffect(() => {
     void api.hyperframeThemes().then((r) => {
       setHfThemes(r.themes)
       setHfLayouts(r.layouts || [])
@@ -795,6 +819,40 @@ export function PublishPage({ session, onUpdate }: Props) {
         void runAutoPost(vp || resultVideoPath)
       }
     }
+    if (job.type === 'subtitle_asr') {
+      const payload = job.payload as { session_path?: string }
+      const jobPath = payload.session_path || job.session_path
+      if (!sameSessionPath(jobPath, session.path)) return
+      const cues = (job.result?.cues || []) as SubCue[]
+      const n = cues.length
+      if (!n) {
+        const msg = '提取完成但没有有效字幕条，请检查口播音频或本地 ASR 是否可用'
+        setExtractFeedback({ kind: 'error', text: msg })
+        setLog(msg)
+        return
+      }
+      setCues(cues)
+      setTimingNote(String(job.result?.timing_note || '一键提取 · 以音频为准'))
+      setCuesEdited(true)
+      setEnableSubtitles(true)
+      setEnablePipTimeline(true)
+      setSubtitlePreviewStale(true)
+      const scriptText = String(job.result?.script || '')
+      if (scriptText) {
+        setScript(scriptText)
+        if (onUpdate) {
+          void api.sessionSnapshot(session.path).then(onUpdate).catch(() => {})
+        }
+      }
+      setPreviewCueIndex(cues[0].index)
+      setSelectedCueIndices([])
+      const okMsg =
+        `提取成功：${n} 条字幕` +
+        (job.result?.script_updated ? ' · 会话文案已同步为识别结果' : '') +
+        (job.result?.timing_note ? ` · ${String(job.result.timing_note)}` : '')
+      setExtractFeedback({ kind: 'ok', text: okMsg })
+      setLog(okMsg)
+    }
   }, [jobQueue.completionTick, jobQueue.lastFinished, session.path])
 
   useEffect(() => {
@@ -845,51 +903,36 @@ export function PublishPage({ session, onUpdate }: Props) {
       return
     }
     setExtractLoading(true)
-    setExtractFeedback({ kind: 'info', text: '正在从音频提取字幕，请稍候…' })
-    setLog('正在从音频提取字幕…')
+    setExtractFeedback({ kind: 'info', text: '已提交本地 ASR 到任务中心…' })
+    setLog('字幕 ASR 已加入任务中心…')
     try {
-      const res = await api.extractPublishSubtitles({
-        session_path: session.path,
-        use_video_audio: true,
-        update_script: true,
-        subtitle_font_size: subtitleFontSize,
-        output_aspect: publishAspect,
+      const outcome = await jobQueue.enqueue({
+        type: 'subtitle_asr',
+        title: '字幕 ASR 提取',
+        force: true,
+        payload: {
+          session_path: session.path,
+          use_video_audio: true,
+          update_script: true,
+          subtitle_font_size: subtitleFontSize,
+          output_aspect: publishAspect,
+        },
       })
-      const n = res.cues?.length || 0
-      if (!n) {
-        const msg = '提取完成但没有有效字幕条，请检查口播音频或 Whisper 是否可用'
+      if (outcome.ok) {
+        setExtractFeedback({
+          kind: 'info',
+          text: '已加入任务中心，本地引擎识别完成后自动回填字幕。',
+        })
+        setLog('字幕 ASR 已加入任务中心（见任务中心进度）')
+        jobQueue.setCenterOpen(true)
+      } else {
+        const msg = outcome.message || '当前已有相同字幕提取任务'
         setExtractFeedback({ kind: 'error', text: msg })
         setLog(msg)
-        return
       }
-      setCues(res.cues || [])
-      setTimingNote(res.timing_note || '一键提取 · 以音频为准')
-      setCuesEdited(true)
-      setEnableSubtitles(true)
-      setEnablePipTimeline(true)
-      setSubtitlePreviewStale(true)
-      if (res.script) {
-        setScript(res.script)
-        if (onUpdate) {
-          try {
-            const snap = await api.sessionSnapshot(session.path)
-            onUpdate(snap)
-          } catch {
-            /* ignore snapshot refresh failure */
-          }
-        }
-      }
-      setPreviewCueIndex(res.cues[0].index)
-      setSelectedCueIndices([])
-      const okMsg =
-        `提取成功：${n} 条字幕` +
-        (res.script_updated ? ' · 会话文案已同步为识别结果' : '') +
-        (res.timing_note ? ` · ${res.timing_note}` : '')
-      setExtractFeedback({ kind: 'ok', text: okMsg })
-      setLog(okMsg)
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
-      setExtractFeedback({ kind: 'error', text: `提取失败：${msg}` })
+      setExtractFeedback({ kind: 'error', text: `提交失败：${msg}` })
       setLog(`提取字幕失败：${msg}`)
     } finally {
       setExtractLoading(false)
@@ -1452,6 +1495,7 @@ export function PublishPage({ session, onUpdate }: Props) {
     if (!path || !session.path || !onUpdate) return
     if (pathsRoughlyEqual(path, selectedLipsyncPath)) return
     try {
+      await api.prepareSessionMedia(path).catch(() => null)
       await api.selectSessionLipsync(session.path, path)
       const snap = await api.sessionSnapshot(session.path)
       onUpdate(snap)
@@ -3195,7 +3239,13 @@ export function PublishPage({ session, onUpdate }: Props) {
                       {bgmTracks.length === 0 && <option value="hook_drop">爆款开场</option>}
                       {bgmTracks.map((t) => (
                         <option key={t.id} value={t.id} disabled={!t.ready}>
-                          {t.user ? '[我的] ' : t.category ? `[${t.category}] ` : ''}
+                          {t.from_asset
+                            ? '[素材] '
+                            : t.user
+                              ? '[我的] '
+                              : t.category
+                                ? `[${t.category}] `
+                                : ''}
                           {t.name} · {t.mood}
                           {!t.ready ? '（未下载）' : ''}
                         </option>
@@ -3250,7 +3300,7 @@ export function PublishPage({ session, onUpdate }: Props) {
                   >
                     {bgmUploadBusy ? '上传中…' : '上传我的 BGM'}
                   </button>
-                  {activeBgm?.user && (
+                  {activeBgm?.user && !activeBgm?.from_asset && (
                     <button
                       type="button"
                       className="rounded-lg border border-red-400/40 px-3 py-1.5 text-xs text-red-600 hover:bg-red-500/10"
@@ -3272,7 +3322,9 @@ export function PublishPage({ session, onUpdate }: Props) {
                       删除此上传
                     </button>
                   )}
-                  <span className="text-[10px] text-[var(--muted)]">也可在素材中心「背景音乐」分组管理</span>
+                  <span className="text-[10px] text-[var(--muted)]">
+                    也可在素材中心「背景音乐 / 音频」上传；窗口切回后会自动刷新曲库
+                  </span>
                 </div>
                 <div className="rounded-lg border border-dashed border-[var(--border)] px-3 py-2">
                   <div className="flex flex-wrap items-center justify-between gap-2">
@@ -3312,13 +3364,16 @@ export function PublishPage({ session, onUpdate }: Props) {
                 当前曲库为旧版合成音轨，音质较差。重启服务会自动下载真实 BGM，或运行：py -3.11 scripts/download_bgm.py --force
               </p>
             )}
-            {enableBgm && activeBgm?.preview_url && (
+            {enableBgm && (activeBgm?.local_path || activeBgm?.preview_url) && (
               <audio
                 ref={bgmAudioRef}
                 key={`${bgmId}-${bgmStart}`}
                 className="mt-2 w-full"
                 controls
-                src={activeBgm.preview_url}
+                preload="auto"
+                src={
+                  playableUrl(activeBgm.preview_url, { localPath: activeBgm.local_path }) || undefined
+                }
                 onLoadedMetadata={(e) => {
                   e.currentTarget.currentTime = bgmStart
                 }}
@@ -3573,13 +3628,35 @@ export function PublishPage({ session, onUpdate }: Props) {
                   />
                 </label>
                 <label className="block text-xs text-[var(--muted)]">
-                  话题（空格或逗号分隔）
+                  话题（空格或逗号分隔，最多 5 个）
                   <input
                     value={postTopics}
-                    onChange={(e) => setPostTopics(e.target.value)}
+                    onChange={(e) => {
+                      const raw = e.target.value
+                      const parts = raw
+                        .split(/[,，#\s]+/)
+                        .map((t) => t.trim())
+                        .filter(Boolean)
+                      if (parts.length > 5) {
+                        // Keep typing spaces/commas while capping tags
+                        setPostTopics(parts.slice(0, 5).join(' '))
+                        return
+                      }
+                      setPostTopics(raw)
+                    }}
                     className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--panel)] px-2 py-2 text-sm"
-                    placeholder="例如：干货分享 职场避坑"
+                    placeholder="例如：干货分享 职场避坑（抖音等平台最多 5 个）"
                   />
+                  <span className="mt-1 block text-[10px] text-[var(--muted)]">
+                    已填{' '}
+                    {
+                      postTopics
+                        .split(/[,，#\s]+/)
+                        .map((t) => t.trim())
+                        .filter(Boolean).length
+                    }
+                    /5 · 超过会被截断，避免创作者中心卡在选话题
+                  </span>
                 </label>
                 {loginGuide && (
                   <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 space-y-2">
@@ -3643,9 +3720,13 @@ export function PublishPage({ session, onUpdate }: Props) {
                         if (sug.ok) {
                           if (sug.title) setPostTitle(sug.title)
                           if (sug.description) setPostDesc(sug.description)
-                          if (sug.topics?.length) setPostTopics(sug.topics.join(' '))
+                          if (sug.topics?.length) setPostTopics(sug.topics.slice(0, 5).join(' '))
                           else if (sug.subtitle) setPostTopics((prev) => prev || sug.subtitle || '')
-                          setLog('已根据文案自动填写标题/简介/话题')
+                          setLog(
+                            sug.topics && sug.topics.length > 5
+                              ? '已自动填写标题/简介/话题（话题已限制为 5 个）'
+                              : '已根据文案自动填写标题/简介/话题',
+                          )
                         } else setLog(sug.message || '自动填写失败')
                       } catch (e) {
                         setLog(e instanceof Error ? e.message : String(e))
@@ -3722,9 +3803,17 @@ export function PublishPage({ session, onUpdate }: Props) {
                       ? `当前发布源 · 导出 ${publishAspect === 'landscape_16_9' ? '16:9' : '9:16'} · 预览框固定 9:16`
                       : '横屏素材在 9:16 框内宽度铺满、高度自适应'
                   }
+                  onExpand={
+                    lipsyncPreviewUrl
+                      ? () => {
+                          setVideoTheaterTitle('口播原片 · 应用内全屏')
+                          setVideoTheaterSrc(lipsyncPreviewUrl)
+                        }
+                      : undefined
+                  }
                 >
                   {lipsyncPreviewUrl ? (
-                    <PhoneFitVideo key={lipsyncPreviewUrl} src={lipsyncPreviewUrl} controls />
+                    <PhoneFitVideo key={lipsyncPreviewUrl} src={lipsyncPreviewUrl} controls preload="auto" />
                   ) : (
                     <div className="absolute inset-0 flex items-center justify-center px-3 text-center text-xs text-[var(--muted)]">
                       暂无口播视频
@@ -3813,8 +3902,15 @@ export function PublishPage({ session, onUpdate }: Props) {
           )}
 
           {resultVideo && (
-            <PhonePreviewSlot aspect="9:16" label="发布后成片">
-              <PhoneFitVideo src={resultVideo} controls />
+            <PhonePreviewSlot
+              aspect="9:16"
+              label="发布后成片"
+              onExpand={() => {
+                setVideoTheaterTitle('发布成片 · 应用内全屏')
+                setVideoTheaterSrc(resultVideo)
+              }}
+            >
+              <PhoneFitVideo src={resultVideo} controls preload="auto" />
             </PhonePreviewSlot>
           )}
         </PhonePreviewColumn>
@@ -4152,14 +4248,8 @@ export function PublishPage({ session, onUpdate }: Props) {
       />
 
       {previewLightboxOpen && subtitlePreviewUrl && (
-        <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4"
-          onClick={() => setPreviewLightboxOpen(false)}
-        >
-          <div
-            className="relative max-h-[92vh] max-w-[min(96vw,960px)] overflow-auto rounded-2xl border border-[var(--border)] bg-[#141820] p-2 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4">
+          <div className="relative max-h-[92vh] max-w-[min(96vw,960px)] overflow-auto rounded-2xl border border-[var(--border)] bg-[#141820] p-2 shadow-xl">
             <button
               type="button"
               className="absolute right-3 top-3 z-10 rounded-lg bg-black/50 px-2 py-1 text-xs text-white underline"
@@ -4177,6 +4267,13 @@ export function PublishPage({ session, onUpdate }: Props) {
           </div>
         </div>
       )}
+
+      <InAppVideoTheater
+        open={!!videoTheaterSrc}
+        src={videoTheaterSrc || ''}
+        title={videoTheaterTitle}
+        onClose={() => setVideoTheaterSrc(null)}
+      />
     </div>
   )
 }

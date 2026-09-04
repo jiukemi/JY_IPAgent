@@ -119,8 +119,14 @@ def run_script_rewrite(
 ) -> str:
     if on_progress:
         on_progress(0.05, "仿写准备…")
-    use_llm = is_cloud(cfg, "script") or has_llm_key(cfg, "rewrite")
-    if use_llm:
+    has_key = has_llm_key(cfg, "rewrite")
+    # Never call cloud LLM without a key (hangs / empty auth)
+    if is_cloud(cfg, "script") and not has_key:
+        raise RuntimeError(
+            "文案步骤为「云端」但未配置文本大模型 Key。\n"
+            "请到设置 → ① 文案填写 Key，或把文案步骤改回「本地」。"
+        )
+    if has_key:
         return rewrite_with_llm(
             cfg, text, intensity=intensity, style=style, on_progress=on_progress
         )

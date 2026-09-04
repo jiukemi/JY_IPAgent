@@ -64,6 +64,7 @@ export type VoiceItem = {
   label: string
   kind: string
   preview_url?: string | null
+  local_path?: string | null
   category?: string
   hint?: string
 }

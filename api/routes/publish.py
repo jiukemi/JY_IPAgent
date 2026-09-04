@@ -318,7 +318,8 @@ def bgm_preview(id: str = Query(..., alias="id")):
     path = resolve_bgm_path(id)
     if not path:
         raise HTTPException(status_code=404, detail="BGM 未下载，请运行 scripts/download_bgm.py 或重新上传")
-    return safe_file_response(path, media_type="audio/mpeg")
+    # Guess MIME (wav/m4a/mp3…); do not force mpeg — breaks non-mp3 asset audio
+    return safe_file_response(path)
 
 
 @router.post("/bgm/upload")
@@ -1125,12 +1126,9 @@ def publish_auto_post(body: AutoPostBody) -> StageResult:
     if not video_path:
         raise HTTPException(status_code=400, detail="请先完成一键成片，再自动发布")
 
-    if isinstance(body.topics, str):
-        topics = [t.strip() for t in body.topics.replace("，", ",").replace("#", " ").split(",") if t.strip()]
-        if len(topics) <= 1:
-            topics = [t for t in body.topics.replace("，", " ").replace(",", " ").split() if t.strip()]
-    else:
-        topics = [str(t).strip().lstrip("#") for t in body.topics if str(t).strip()]
+    from workflow.session import normalize_publish_topics
+
+    topics = normalize_publish_topics(body.topics)
 
     platforms: list[str] = []
     if body.platforms:

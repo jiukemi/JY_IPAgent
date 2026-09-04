@@ -8,6 +8,7 @@ contextBridge.exposeInMainWorld('agentDesktop', {
   appVersion: () => ipcRenderer.invoke('desktop:app-version'),
   downloadUpdate: (release) => ipcRenderer.invoke('desktop:download-update', release),
   openReleasePage: (url) => ipcRenderer.invoke('desktop:open-release-page', url),
+  openPath: (filePath) => ipcRenderer.invoke('desktop:open-path', filePath),
   onUpdateProgress: (cb) => {
     const handler = (_event, payload) => {
       try {

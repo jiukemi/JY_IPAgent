@@ -245,5 +245,6 @@ class VoiceItem(BaseModel):
     label: str
     kind: str
     preview_url: str | None = None
+    local_path: str | None = None
     category: str = ""
     hint: str = ""

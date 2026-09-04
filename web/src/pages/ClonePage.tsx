@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api } from '../api/client'
+import { api, playableUrl } from '../api/client'
 import { AlertModal } from '../components/AlertModal'
 import { formatAudioDuration } from '../components/AudioPreviewButton'
 import type { TtsOptions } from '../types'
+import { normalizeAudioToWavFile } from '../utils/audioNormalize'
 import { ActionBtn, Panel } from './ScriptPage'
 
 type InputMode = 'upload' | 'record'
@@ -15,11 +16,13 @@ type LibraryVoice = {
   created_at?: string
   backend?: string
   preview_url?: string | null
+  local_path?: string | null
+  reference_wav?: string | null
   prompt_text?: string
 }
 
 type Props = {
-  onVoiceSaved?: () => void
+  onVoiceSaved?: (voiceUid?: string) => void
   /** When true, omit duplicate engine banner (shown on 配音 page already). */
   embedded?: boolean
 }
@@ -62,6 +65,8 @@ export function ClonePage({ onVoiceSaved, embedded = false }: Props) {
   const [recordedSec, setRecordedSec] = useState<number | null>(null)
   const [playingId, setPlayingId] = useState<string | null>(null)
   const [alert, setAlert] = useState<{ title: string; message: string; variant: 'error' | 'warning' | 'success' } | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<{ id: string; name: string } | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const [runtime, setRuntime] = useState<TtsOptions | null>(null)
   const [promptText, setPromptText] = useState('')
 
@@ -117,13 +122,25 @@ export function ClonePage({ onVoiceSaved, embedded = false }: Props) {
     if (!f) setRecordedSec(null)
   }
 
+  /** 录制/上传后立刻转成 wav，试听与落盘都走标准 PCM，不再等 WebM 缓冲 */
+  const setNormalizedAudio = async (raw: File, fallbackSec?: number | null) => {
+    try {
+      const wav = await normalizeAudioToWavFile(raw, raw.name || 'recording')
+      setAudioFile(wav)
+      if (fallbackSec != null) setRecordedSec(fallbackSec)
+    } catch {
+      setAudioFile(raw)
+      if (fallbackSec != null) setRecordedSec(fallbackSec)
+    }
+  }
+
   const pickFile = (f: File | null) => {
     if (!f) return
     if (!f.type.startsWith('audio/') && !/\.(wav|mp3|m4a|ogg|webm|flac)$/i.test(f.name)) {
       setAlert({ title: '格式不支持', message: '请上传音频文件（wav / mp3 / m4a 等）', variant: 'warning' })
       return
     }
-    setAudioFile(f)
+    void setNormalizedAudio(f)
   }
 
   const onDrop = (e: React.DragEvent) => {
@@ -134,28 +151,43 @@ export function ClonePage({ onVoiceSaved, embedded = false }: Props) {
 
   const startRecording = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-      const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm'
-      const recorder = new MediaRecorder(stream, { mimeType: mime })
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          channelCount: 1,
+        },
+      })
+      const mimeCandidates = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/mp4',
+        'audio/ogg;codecs=opus',
+      ]
+      const mime = mimeCandidates.find((t) => MediaRecorder.isTypeSupported(t)) || ''
+      const recorder = mime
+        ? new MediaRecorder(stream, { mimeType: mime })
+        : new MediaRecorder(stream)
+      const actualMime = recorder.mimeType || mime || 'audio/webm'
       chunksRef.current = []
       recorder.ondataavailable = (ev) => {
         if (ev.data.size > 0) chunksRef.current.push(ev.data)
       }
       recorder.onstop = () => {
         stream.getTracks().forEach((t) => t.stop())
-        const blob = new Blob(chunksRef.current, { type: mime })
-        const f = new File([blob], `recording_${Date.now()}.webm`, { type: mime })
-        setRecordedSec(recordSecRef.current)
-        setAudioFile(f)
+        const blob = new Blob(chunksRef.current, { type: actualMime })
+        const ext = actualMime.includes('mp4') ? 'm4a' : actualMime.includes('ogg') ? 'ogg' : 'webm'
+        const f = new File([blob], `recording_${Date.now()}.${ext}`, { type: actualMime })
+        const sec = recordSecRef.current
         if (timerRef.current) window.clearInterval(timerRef.current)
         setRecordSec(0)
         recordSecRef.current = 0
         setRecording(false)
+        void setNormalizedAudio(f, sec)
       }
       mediaRecorderRef.current = recorder
-      recorder.start(200)
+      // 不要 start(200)：分片 WebM 在 Electron 里常导致试听卡住/等很久才出声
+      recorder.start()
       setRecording(true)
       setRecordSec(0)
       recordSecRef.current = 0
@@ -212,12 +244,13 @@ export function ClonePage({ onVoiceSaved, embedded = false }: Props) {
     try {
       const res = await api.cloneVoice(name || '克隆音色', file, mode, promptText)
       const msg = res.message || '已保存到音色库，关闭弹窗后可在「克隆音色」中选用'
+      const savedId = typeof res.data?.id === 'string' ? res.data.id : ''
       setAlert({ title: '保存成功', message: msg, variant: 'success' })
       setAudioFile(null)
       setRecordedSec(null)
       await loadLibrary()
       await loadDefaultName(mode)
-      onVoiceSaved?.()
+      onVoiceSaved?.(savedId ? `clone:${savedId}` : undefined)
     } catch (e) {
       setAlert({
         title: '保存失败',
@@ -229,42 +262,55 @@ export function ClonePage({ onVoiceSaved, embedded = false }: Props) {
     }
   }
 
-  const removeVoice = async (id: string, e: React.MouseEvent) => {
+  const askRemoveVoice = (v: LibraryVoice, e: React.MouseEvent) => {
+    e.preventDefault()
     e.stopPropagation()
-    if (!confirm('确定删除该音色？')) return
+    setPendingDelete({ id: v.id, name: v.name })
+  }
+
+  const confirmRemoveVoice = async () => {
+    if (!pendingDelete) return
+    const { id } = pendingDelete
+    setDeleting(true)
     try {
       await api.deleteVoice(id)
       if (playingId === id) {
         libraryAudioRef.current?.pause()
         setPlayingId(null)
       }
+      setLibrary((prev) => prev.filter((x) => x.id !== id))
+      setPendingDelete(null)
       await loadLibrary()
       onVoiceSaved?.()
     } catch (err) {
+      setPendingDelete(null)
       setAlert({
         title: '删除失败',
         message: err instanceof Error ? err.message : String(err),
         variant: 'error',
       })
+    } finally {
+      setDeleting(false)
     }
   }
 
   const playLibraryVoice = async (v: LibraryVoice) => {
-    if (!v.preview_url) return
+    const src = playableUrl(v.preview_url, { localPath: v.local_path || v.reference_wav })
+    if (!src) return
     if (playingId === v.id && libraryAudioRef.current && !libraryAudioRef.current.paused) {
       libraryAudioRef.current.pause()
       setPlayingId(null)
       return
     }
     libraryAudioRef.current?.pause()
-    const audio = libraryAudioRef.current ?? new Audio()
+    const audio = new Audio(src)
     libraryAudioRef.current = audio
+    audio.preload = 'auto'
     audio.onended = () => setPlayingId(null)
     audio.onerror = () => setPlayingId(null)
-    audio.src = v.preview_url
+    setPlayingId(v.id)
     try {
       await audio.play()
-      setPlayingId(v.id)
     } catch {
       setPlayingId(null)
     }
@@ -437,7 +483,7 @@ export function ClonePage({ onVoiceSaved, embedded = false }: Props) {
               </span>
               <span className="truncate">{file?.name}</span>
             </div>
-            <audio src={previewUrl} controls className="w-full" />
+            <audio key={previewUrl} src={previewUrl} controls preload="auto" className="w-full" />
             <button
               type="button"
               onClick={() => setAudioFile(null)}
@@ -483,7 +529,7 @@ export function ClonePage({ onVoiceSaved, embedded = false }: Props) {
                     isPlaying
                       ? 'border-[var(--accent)] bg-[var(--select-bg)] shadow-[0_0_24px_var(--select-shadow)]'
                       : 'border-[var(--border)] bg-[var(--bg)] hover:border-[var(--accent)] hover:shadow-md'
-                  } ${v.preview_url ? 'cursor-pointer' : 'cursor-default opacity-80'}`}
+                  } ${v.preview_url || v.local_path || v.reference_wav ? 'cursor-pointer' : 'cursor-default opacity-80'}`}
                 >
                   <div
                     className="pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full opacity-20 blur-2xl transition group-hover:opacity-40"
@@ -533,13 +579,13 @@ export function ClonePage({ onVoiceSaved, embedded = false }: Props) {
                     </div>
                     <button
                       type="button"
-                      onClick={(e) => void removeVoice(v.id, e)}
-                      className="shrink-0 rounded-lg border border-red-900/40 px-2 py-1 text-[10px] text-red-400 hover:bg-red-500/10"
+                      onClick={(e) => askRemoveVoice(v, e)}
+                      className="relative z-10 shrink-0 rounded-lg border border-red-900/40 px-2 py-1 text-[10px] text-red-400 hover:bg-red-500/10"
                     >
                       删除
                     </button>
                   </div>
-                  {v.preview_url && (
+                  {(v.preview_url || v.local_path || v.reference_wav) && (
                     <p className="relative mt-3 text-[10px] text-[var(--muted)]">
                       {isPlaying ? '播放中… 点击卡片暂停' : '点击卡片试听'}
                     </p>
@@ -557,6 +603,22 @@ export function ClonePage({ onVoiceSaved, embedded = false }: Props) {
         message={alert?.message || ''}
         variant={alert?.variant || 'info'}
         onClose={() => setAlert(null)}
+      />
+      <AlertModal
+        open={!!pendingDelete}
+        title="删除音色"
+        message={
+          pendingDelete
+            ? `确定删除「${pendingDelete.name}」？删除后不可恢复，配音页将无法再选用该克隆音色。`
+            : ''
+        }
+        variant="warning"
+        confirmLabel="删除"
+        confirmBusy={deleting}
+        onConfirm={() => void confirmRemoveVoice()}
+        onClose={() => {
+          if (!deleting) setPendingDelete(null)
+        }}
       />
     </div>
   )

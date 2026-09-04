@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { AlertModal, parseApiError } from '../components/AlertModal'
 import { AudioPreviewButton, formatAudioDuration } from '../components/AudioPreviewButton'
@@ -40,7 +40,9 @@ type Props = {
   onOpenSettings: (section?: 'tts' | 'env') => void
   configVersion?: number
   voiceVersion?: number
-  onVoiceSaved?: () => void
+  onVoiceSaved?: (voiceUid?: string) => void
+  /** 当前是否在配音步骤；首次进入才拉取引擎，避免一启动就卡 */
+  active?: boolean
 }
 
 export function TtsPage({
@@ -50,6 +52,7 @@ export function TtsPage({
   configVersion = 0,
   voiceVersion = 0,
   onVoiceSaved,
+  active = true,
 }: Props) {
   const jobQueue = useJobQueue()
   const [source, setSource] = useState<TextSource>('script')
@@ -74,12 +77,15 @@ export function TtsPage({
   const [modelMsg, setModelMsg] = useState('')
   const [alert, setAlert] = useState<AlertState | null>(null)
   const [cloneManageOpen, setCloneManageOpen] = useState(false)
+  const cloneDirtyRef = useRef(false)
   const [engineOpen, setEngineOpen] = useState(true)
   const [verifying, setVerifying] = useState(false)
   const [previewStats, setPreviewStats] = useState<{ total: number; cached: number; missing: number } | null>(null)
   const [buildingPreviews, setBuildingPreviews] = useState(false)
   const [previewMsg, setPreviewMsg] = useState('')
   const [previewBuildPct, setPreviewBuildPct] = useState(0)
+  const [ttsWorker, setTtsWorker] = useState<{ enabled: boolean; running: boolean } | null>(null)
+  const [workerBusy, setWorkerBusy] = useState(false)
   const selectedDubPath = session.selected_dub ?? session.dubbing_audio
 
   const onDubSelect = useCallback(
@@ -184,6 +190,27 @@ export function TtsPage({
     }
   }
 
+  useEffect(() => {
+    if (!active) return
+    let cancelled = false
+    const tick = () => {
+      api
+        .ttsWorkerStatus()
+        .then((s) => {
+          if (!cancelled) setTtsWorker(s)
+        })
+        .catch(() => {
+          if (!cancelled) setTtsWorker(null)
+        })
+    }
+    tick()
+    const id = window.setInterval(tick, 4000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
+    }
+  }, [active, emoPreviewBusy, busy, buildingPreviews])
+
   const previewCloneEmotion = async (mode: 'plain' | 'styled') => {
     if (!session.path || !voiceUid.startsWith('clone:')) {
       setAlert({ title: '请先选择克隆音色', message: '在下方音色列表中点选你的克隆音色后再试听。', variant: 'warning' })
@@ -212,6 +239,7 @@ export function TtsPage({
       refreshVoiceEmoStyles(emoEngine, voiceUid)
       if (mode === 'plain') setEmoPreviewPlain(url)
       else setEmoPreviewStyled(url)
+      void api.ttsWorkerStatus().then(setTtsWorker).catch(() => {})
     } catch (e) {
       const { title, message } = parseApiError(e, '试听失败')
       setAlert({ title, message, variant: 'error' })
@@ -302,9 +330,48 @@ export function TtsPage({
     return opts
   }, [loadVoices])
 
+  const loadedConfigRef = useRef<number | null>(null)
+
   useEffect(() => {
-    void loadRuntime()
-  }, [configVersion, voiceVersion, loadRuntime])
+    if (!active) return
+    if (loadedConfigRef.current === configVersion) return
+    let cancelled = false
+    void loadRuntime().then(() => {
+      if (!cancelled) loadedConfigRef.current = configVersion
+    })
+    return () => {
+      cancelled = true
+    }
+    // 仅在进入配音页或配置变更时拉取；音色变更走下方独立刷新
+  }, [active, configVersion, loadRuntime])
+
+  useEffect(() => {
+    if (!voiceVersion || !runtime?.engine) return
+    void loadVoices(runtime.engine, voiceUid, false, runtime.profile)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to voice library bumps
+  }, [voiceVersion])
+
+  const closeCloneManage = useCallback(() => {
+    setCloneManageOpen(false)
+    if (!cloneDirtyRef.current || !runtime?.engine) return
+    cloneDirtyRef.current = false
+    void loadVoices(runtime.engine, voiceUid, false, runtime.profile)
+  }, [loadVoices, runtime?.engine, runtime?.profile, voiceUid])
+
+  const onCloneLibraryChanged = useCallback(
+    (nextUid?: string) => {
+      cloneDirtyRef.current = true
+      if (runtime?.engine) {
+        void loadVoices(runtime.engine, nextUid || voiceUid, Boolean(nextUid), runtime.profile).then(() => {
+          if (nextUid) setVoiceUid(nextUid)
+        })
+      } else if (nextUid) {
+        setVoiceUid(nextUid)
+      }
+      onVoiceSaved?.(nextUid)
+    },
+    [loadVoices, onVoiceSaved, runtime?.engine, runtime?.profile, voiceUid],
+  )
 
   const refreshSession = async () => {
     onUpdate(await api.sessionSnapshot(session.path))
@@ -322,28 +389,11 @@ export function TtsPage({
 
   const onEngineChange = async (engine: string) => {
     if (!runtime || engine === runtime.engine || savingModel) return
-    setModelMsg('')
-    try {
-      const setup = await api.setupEngines()
-      const st = setup.engines?.find((e) => e.engine === engine)
-      if (st && !st.compatible) {
-        const why =
-          st.missing?.length > 0
-            ? st.missing.slice(0, 3).map((m) => `· ${m}`).join('\n')
-            : `建议显存 ≥ ${st.min_vram_gb}GB`
-        setAlert({
-          title: '本机暂不支持该配音引擎',
-          message: `「${st.label}」当前机器跑不了。\n\n${why}\n\n请改选云端 Qwen3-TTS，或 Piper（CPU 可跑）。`,
-          variant: 'warning',
-        })
-        return
-      }
-    } catch {
-      /* 探测失败不阻断切换，后端安装时仍会校验 */
-    }
-    setSavingModel(true)
     const prev = runtime
     const picked = runtime.engines.find((e) => e.value === engine)
+    // 立刻反馈：先切 UI，再落盘；不再每次先扫全套硬件（以前会卡很久且无提示）
+    setSavingModel(true)
+    setModelMsg(`正在切换到「${picked?.label || engine}」…`)
     setRuntime({
       ...runtime,
       engine,
@@ -370,26 +420,28 @@ export function TtsPage({
     setSystem([])
     setClones([])
     try {
-      // 先落盘并立刻解锁 UI，音色列表后台刷新，避免「卡住」
-      await Promise.race([
-        api.saveTtsSettings({ engine }),
-        new Promise((_, reject) =>
-          window.setTimeout(() => reject(new Error('切换超时，请重试或重启服务')), 12000),
-        ),
-      ])
-      setSavingModel(false)
-      setModelMsg('已切换，正在刷新音色…')
-      await loadRuntime(engine, true)
-      setModelMsg('已切换模型，音色列表已更新')
+      // PUT 已返回完整 tts options，无需再请求 /tts/options
+      const opts = await api.saveTtsSettings({ engine })
+      setRuntime(opts)
+      const draft: Record<string, string | number | boolean> = {}
+      for (const f of opts.fields) draft[f.key] = f.value
+      setFieldDraft(draft)
+      setModelMsg('正在刷新音色列表…')
+      await loadVoices(opts.engine, opts.default_voice_uid, true, opts.profile)
+      setModelMsg(`已切换为 ${opts.engine_label}`)
+      void api.previewStatus(opts.engine).then((ps) => {
+        setPreviewStats({ total: ps.total, cached: ps.cached, missing: ps.missing })
+      }).catch(() => setPreviewStats(null))
     } catch (e) {
       setRuntime(prev)
       setModelMsg(e instanceof Error ? e.message : String(e))
-      setSavingModel(false)
       try {
         await loadRuntime()
       } catch {
         /* ignore */
       }
+    } finally {
+      setSavingModel(false)
     }
   }
 
@@ -628,12 +680,77 @@ export function TtsPage({
     (j) => j.type === 'tts_synthesize' && (j.status === 'queued' || j.status === 'running'),
   )
 
+  const engineBusy =
+    emoPreviewBusy || buildingPreviews || busy || Boolean(ttsRunningJob) || workerBusy
+  const engName = runtime?.engine_label || runtime?.engine || '配音引擎'
 
   const scriptEmpty = !scriptText.trim()
   const supportsClone = !!runtime?.profile?.supports_clone
 
   return (
     <div className="flex flex-col gap-4">
+      {(engineBusy || ttsWorker?.running) && (
+        <div
+          className={`rounded-xl border px-4 py-3 text-sm ${
+            engineBusy
+              ? 'border-amber-500/50 bg-amber-500/10 text-amber-950 dark:text-amber-100'
+              : 'border-[var(--select-border)] bg-[var(--select-bg)] text-[var(--accent)]'
+          }`}
+          role="status"
+        >
+          {emoPreviewBusy ? (
+            <p className="font-medium">
+              {engName} 正在 GPU 合成「情感试听」…
+              <span className="mt-1 block text-xs font-normal opacity-80">
+                这不是播放本地录音；首次加载模型时显存会明显升高，请等合成结束。只听参考音请点音色旁的 ▶。
+              </span>
+            </p>
+          ) : buildingPreviews ? (
+            <p className="font-medium">
+              {engName} 正在批量生成系统音色试听缓存（GPU）…
+              <span className="mt-1 block text-xs font-normal opacity-80">{previewMsg || '请稍候'}</span>
+            </p>
+          ) : ttsRunningJob || busy ? (
+            <p className="font-medium">
+              {engName} 正在生成配音（GPU）…
+              <span className="mt-1 block text-xs font-normal opacity-80">
+                {ttsRunningJob?.message || '可在任务中心查看进度'}
+              </span>
+            </p>
+          ) : ttsWorker?.running ? (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="font-medium">
+                IndexTTS 常驻进程占用 GPU
+                <span className="mt-1 block text-xs font-normal opacity-80">
+                  为加速下次合成而常驻；不用时可停止以释放显存。
+                </span>
+              </p>
+              <button
+                type="button"
+                disabled={workerBusy}
+                onClick={() => {
+                  setWorkerBusy(true)
+                  void api
+                    .ttsWorkerStop()
+                    .then((s) => setTtsWorker({ enabled: false, running: s.running }))
+                    .catch((e) =>
+                      setAlert({
+                        title: '停止失败',
+                        message: e instanceof Error ? e.message : String(e),
+                        variant: 'error',
+                      }),
+                    )
+                    .finally(() => setWorkerBusy(false))
+                }}
+                className="rounded-lg border border-red-500/40 px-3 py-1.5 text-xs text-red-600 hover:bg-red-500/10"
+              >
+                {workerBusy ? '处理中…' : '停止并释放显存'}
+              </button>
+            </div>
+          ) : null}
+        </div>
+      )}
+
       <Panel title="02 配音 · 引擎与模型">
         {runtime ? (
           <div className="space-y-2">
@@ -695,11 +812,29 @@ export function TtsPage({
               <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
                 <label className="block text-xs text-[var(--muted)]">
                   {isLocal ? '本地 TTS 模型' : '云端 TTS 服务'}
-                  {savingModel ? ' · 切换中…' : ''}
                 </label>
+                {(savingModel || modelMsg) && (
+                  <div
+                    className={`rounded-lg border px-3 py-2 text-xs ${
+                      savingModel
+                        ? 'border-[var(--select-border)] bg-[var(--select-bg)] text-[var(--accent)]'
+                        : 'border-[var(--border)] text-[var(--muted)]'
+                    }`}
+                  >
+                    {savingModel ? (
+                      <span className="inline-flex items-center gap-2">
+                        <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-[var(--accent)] border-t-transparent" />
+                        {modelMsg || '正在切换…'}
+                      </span>
+                    ) : (
+                      modelMsg
+                    )}
+                  </div>
+                )}
                 <div className="mt-1 flex flex-col gap-1.5">
                   {runtime.engines.map((e) => {
-                    const active = e.value === runtime.engine
+                    const activeEng = e.value === runtime.engine
+                    const switchingHere = savingModel && activeEng
                     return (
                       <button
                         key={e.value}
@@ -707,12 +842,15 @@ export function TtsPage({
                         disabled={savingModel}
                         onClick={() => void onEngineChange(e.value)}
                         className={`rounded-lg border px-3 py-2 text-left text-sm transition disabled:opacity-60 ${
-                          active
+                          activeEng
                             ? 'border-[var(--select-border)] bg-[var(--select-bg)] font-medium text-[var(--accent)]'
                             : 'border-[var(--border)] bg-[var(--panel)] hover:border-[var(--select-border)]'
                         }`}
                       >
-                        <span className="block">{e.label}</span>
+                        <span className="block">
+                          {e.label}
+                          {switchingHere ? ' · 切换中…' : ''}
+                        </span>
                         {e.hardware && (
                           <span className="mt-0.5 block text-[10px] text-[var(--muted)]">{e.hardware}</span>
                         )}
@@ -802,10 +940,12 @@ export function TtsPage({
               </div>
             )}
 
-            {savingModel && (
+            {!engineOpen && savingModel && (
               <p className="text-xs text-[var(--accent)]">正在切换引擎并刷新音色…</p>
             )}
-            {modelMsg && <p className="text-xs text-[var(--muted)]">{modelMsg}</p>}
+            {!engineOpen && modelMsg && !savingModel && (
+              <p className="text-xs text-[var(--muted)]">{modelMsg}</p>
+            )}
           </div>
         ) : (
           <p className="text-sm text-[var(--muted)]">加载引擎配置…</p>
@@ -942,7 +1082,10 @@ export function TtsPage({
                 <span className="text-xs font-medium text-[var(--muted)]">克隆音色</span>
                 <button
                   type="button"
-                  onClick={() => setCloneManageOpen(true)}
+                  onClick={() => {
+                    cloneDirtyRef.current = false
+                    setCloneManageOpen(true)
+                  }}
                   className="rounded-lg border border-[var(--select-border)] bg-[var(--select-bg)] px-2.5 py-1 text-xs font-medium text-[var(--accent)]"
                 >
                   音色管理
@@ -1063,16 +1206,19 @@ export function TtsPage({
                   disabled={emoPreviewBusy || !isCloneVoice}
                   onClick={() => void previewCloneEmotion('plain')}
                 >
-                  {emoPreviewBusy ? '合成中…' : '试听 · 无情感'}
+                  {emoPreviewBusy ? 'GPU 合成中…' : '试听 · 无情感'}
                 </ActionBtn>
                 <ActionBtn
                   primary
                   disabled={emoPreviewBusy || !isCloneVoice}
                   onClick={() => void previewCloneEmotion('styled')}
                 >
-                  {emoPreviewBusy ? '合成中…' : '试听 · 当前情感'}
+                  {emoPreviewBusy ? 'GPU 合成中…' : '试听 · 当前情感'}
                 </ActionBtn>
               </div>
+              <p className="text-[10px] text-[var(--muted)]">
+                「试听 · 情感」会调用 {engName} 在 GPU 上重新合成；音色旁 ▶ 才是播本地参考音（不占 GPU）。
+              </p>
               {(emoPreviewPlain || emoPreviewStyled) && (
                 <div className="grid gap-2 sm:grid-cols-2">
                   {emoPreviewPlain && (
@@ -1213,14 +1359,12 @@ export function TtsPage({
       {cloneManageOpen && supportsClone && (
         <div
           className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]"
-          onClick={() => setCloneManageOpen(false)}
           role="presentation"
         >
           <div
             role="dialog"
             aria-modal="true"
             aria-labelledby="clone-manage-title"
-            onClick={(e) => e.stopPropagation()}
             className="flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--panel)] shadow-2xl"
           >
             <div className="flex shrink-0 items-center justify-between border-b border-[var(--border)] px-4 py-3">
@@ -1229,19 +1373,14 @@ export function TtsPage({
               </h3>
               <button
                 type="button"
-                onClick={() => setCloneManageOpen(false)}
+                onClick={() => closeCloneManage()}
                 className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-xs text-[var(--muted)] hover:bg-[var(--bg)]"
               >
                 关闭
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
-              <ClonePage
-                embedded
-                onVoiceSaved={() => {
-                  onVoiceSaved?.()
-                }}
-              />
+              <ClonePage embedded onVoiceSaved={onCloneLibraryChanged} />
             </div>
           </div>
         </div>
@@ -1389,7 +1528,7 @@ function VoiceGrid({
             >
               {v.label}
             </button>
-            <AudioPreviewButton url={v.preview_url} title={`试听 ${v.label}`} />
+            <AudioPreviewButton url={v.preview_url} localPath={v.local_path} title={`试听 ${v.label}`} />
           </div>
         ))}
       </div>

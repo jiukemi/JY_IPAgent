@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api } from '../api/client'
+import { api, playableUrl } from '../api/client'
 
 export type PickerAsset = {
   id: string
@@ -8,6 +8,7 @@ export type PickerAsset = {
   asset_type: string
   media_type: 'image' | 'video'
   preview_url?: string | null
+  local_path?: string | null
   media_path?: string
 }
 
@@ -115,10 +116,28 @@ export function AssetPickerModal({
                   className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-2 text-left hover:border-[var(--accent)]"
                 >
                   <div className="mb-2 flex aspect-video items-center justify-center overflow-hidden rounded-lg bg-[var(--panel)]">
-                    {item.media_type === 'video' && item.preview_url ? (
-                      <video src={item.preview_url} className="max-h-full max-w-full" muted />
-                    ) : item.preview_url ? (
-                      <img src={item.preview_url} alt="" className="max-h-full max-w-full object-contain" />
+                    {item.media_type === 'video' &&
+                    playableUrl(item.preview_url, { localPath: item.local_path || item.media_path }) ? (
+                      <video
+                        src={
+                          playableUrl(item.preview_url, {
+                            localPath: item.local_path || item.media_path,
+                          })!
+                        }
+                        className="max-h-full max-w-full"
+                        muted
+                        preload="metadata"
+                      />
+                    ) : playableUrl(item.preview_url, { localPath: item.local_path || item.media_path }) ? (
+                      <img
+                        src={
+                          playableUrl(item.preview_url, {
+                            localPath: item.local_path || item.media_path,
+                          })!
+                        }
+                        alt=""
+                        className="max-h-full max-w-full object-contain"
+                      />
                     ) : (
                       <span className="text-2xl opacity-40">📄</span>
                     )}

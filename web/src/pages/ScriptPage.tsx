@@ -3,6 +3,9 @@ import { api, mediaUrl, type CompetitorItem } from '../api/client'
 import type { SessionSnapshot } from '../types'
 import { FileDropZone } from '../components/FileDropZone'
 import { PhoneFitVideo } from '../components/PhonePreviewFrame'
+import { InAppVideoTheater } from '../components/InAppVideoTheater'
+import { useJobQueue } from '../context/JobQueueContext'
+import { sameSessionPath } from '../utils/sessionPath'
 
 type Props = {
   session: SessionSnapshot
@@ -15,6 +18,7 @@ type ScriptTab = 'extract' | 'rewritten' | 'legal'
 type IngestTab = 'local' | 'cloud'
 
 export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
+  const jobQueue = useJobQueue()
   const [shareUrl, setShareUrl] = useState(session.share_url || '')
   const [extractText, setExtractText] = useState(session.script_extract || session.script || '')
   const [rewrittenText, setRewrittenText] = useState(session.script_rewritten || '')
@@ -25,6 +29,7 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
   const [ingestTab, setIngestTab] = useState<IngestTab>('local')
   const [log, setLog] = useState('')
   const [busy, setBusy] = useState('')
+  const [theaterOpen, setTheaterOpen] = useState(false)
   const [progress, setProgress] = useState<{ pct: number; desc: string } | null>(null)
   const [llmPaused, setLlmPaused] = useState(false)
   const [lastGenMode, setLastGenMode] = useState<'hotwords' | 'role' | null>(null)
@@ -117,6 +122,10 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
   const refreshBrowserStatus = useCallback(async () => {
     try {
       const st = await api.browserStatus(activePlatform)
+      if ((st as { deferred?: boolean }).deferred) {
+        setBrowserMsg(st.message || '浏览器正用于提取，登录检测暂缓（不是掉登录）')
+        return
+      }
       setBrowserLoggedIn(st.logged_in)
       setBrowserMsg(st.message)
     } catch {
@@ -154,10 +163,21 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
     try {
       if (funasrWorker.running) {
         await api.funasrWorkerStop()
+        setLog('已停止 ASR 常驻加速')
       } else {
-        await api.funasrWorkerStart()
+        const res = await api.funasrWorkerStart()
+        if (!res.ok || !res.running) {
+          setLog(res.message || 'ASR 常驻启动失败（请检查 FunASR 是否已安装 torch）')
+          window.alert(res.message || 'ASR 常驻启动失败，请到设置查看 FunASR / torch 环境')
+        } else {
+          setLog('ASR 常驻加速已启动')
+        }
       }
       await refreshFunasrWorker()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setLog(`ASR 常驻操作失败：${msg}`)
+      window.alert(msg)
     } finally {
       setBusy('')
     }
@@ -245,6 +265,19 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
     }
   }
 
+  const ensureLlmReady = async (actionLabel: string): Promise<boolean> => {
+    try {
+      const { settings } = await api.getSettings()
+      if ((settings.rewrite_api_key || '').trim()) return true
+    } catch {
+      /* treat as missing */
+    }
+    window.alert(
+      `未配置文本大模型 Key，无法进行「${actionLabel}」。\n\n请先打开顶栏「设置 → ① 文案」，填写 DeepSeek / OpenAI 兼容 Key 后再试。`,
+    )
+    return false
+  }
+
   const run = async (label: string, fn: () => Promise<{ log: string; data: Record<string, unknown> }>) => {
     setBusy(label)
     setLog('')
@@ -273,6 +306,7 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
       setLog('请先确认口播文案')
       return
     }
+    if (!(await ensureLlmReady('生成发布文案'))) return
     setBusy('发布文案')
     try {
       const sug = await api.coverSuggest(body, session.path, true)
@@ -310,25 +344,87 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
     }
     setBusy('一键')
     setLog('')
-    setProgress({ pct: 0, desc: isLocal ? '开始本地转写…' : '开始提取…' })
-    api
-      .scriptExtractStream(
-        session.path,
-        isLocal ? '' : shareUrl,
-        isLocal ? upload || undefined : undefined,
-        (pct, desc) => setProgress({ pct, desc }),
-      )
-      .then(async (res) => {
-        setLog(res.log)
-        await refresh()
-        setScriptTab('extract')
-      })
-      .catch((e) => setLog(e instanceof Error ? e.message : String(e)))
-      .finally(() => {
+    setProgress({ pct: 0.05, desc: '加入任务中心…' })
+    void (async () => {
+      try {
+        let refMedia = ''
+        if (isLocal && upload) {
+          setProgress({ pct: 0.08, desc: '上传本地媒体…' })
+          const prep = await api.scriptPrepareMedia(session.path, upload)
+          refMedia = prep.ref_media || ''
+        }
+        const outcome = await jobQueue.enqueue({
+          type: 'script_extract',
+          title: isLocal ? '本地 ASR 转写' : '链接提取文案',
+          force: true,
+          payload: {
+            session_path: session.path,
+            share_url: isLocal ? '' : shareUrl.trim(),
+            ref_media: refMedia,
+          },
+        })
+        if (outcome.ok) {
+          setLog('已加入任务中心：本地引擎 ASR / 提取在后台运行，可继续其它操作。')
+          jobQueue.setCenterOpen(true)
+        } else {
+          setLog(outcome.message || '当前已有相同提取任务')
+        }
+      } catch (e) {
+        setLog(e instanceof Error ? e.message : String(e))
+      } finally {
         setBusy('')
         setProgress(null)
-      })
+      }
+    })()
   }
+
+  useEffect(() => {
+    const job = jobQueue.lastFinished
+    if (!job || jobQueue.completionTick <= 0) return
+    if (job.type !== 'script_extract') return
+    const payload = job.payload as { session_path?: string }
+    const jobPath = payload.session_path || job.session_path
+    if (!sameSessionPath(jobPath, session.path)) return
+    if (job.status === 'failed') {
+      setLog(job.error || job.message || '提取失败')
+      return
+    }
+    if (job.status === 'cancelled') {
+      setLog('提取任务已取消')
+      return
+    }
+    if (job.status !== 'done') return
+    const logText = String(job.result?.log || job.message || '提取完成')
+    setLog(logText)
+    setScriptTab('extract')
+    const scriptText = String(job.result?.script || '').trim()
+    if (scriptText) {
+      setExtractText(scriptText)
+    }
+    void refresh().then(() => {
+      window.dispatchEvent(
+        new CustomEvent('agent:session-refresh', { detail: { sessionPath: session.path } }),
+      )
+    })
+    void refreshBrowserStatus()
+  }, [jobQueue.completionTick, jobQueue.lastFinished, session.path, refreshBrowserStatus])
+
+  /** CDN 下载完成后立刻刷新预览；ASR 仍在跑时右侧也能先出视频 */
+  const activeExtractJob = jobQueue.jobs.find(
+    (j) =>
+      j.type === 'script_extract' &&
+      (j.status === 'queued' || j.status === 'running') &&
+      sameSessionPath(j.session_path || (j.payload as { session_path?: string })?.session_path, session.path),
+  )
+
+  useEffect(() => {
+    if (!activeExtractJob) return
+    void refresh()
+    const t = window.setInterval(() => {
+      void refresh()
+    }, 2000)
+    return () => window.clearInterval(t)
+  }, [activeExtractJob?.id, activeExtractJob?.status, session.path])
 
   const openBrowserLogin = async () => {
     setBusy('登录')
@@ -374,6 +470,7 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
     opts?: { continueFrom?: string },
   ) => {
     const labels = { hotwords: '热词成稿', role: '角色成稿', competitor: '对标仿写' } as const
+    if (!(await ensureLlmReady(labels[mode]))) return
     setBusy(labels[mode])
     setLog('')
     setProgress({
@@ -602,7 +699,7 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
             {ingestTab === 'cloud' && (
               <div className="space-y-3 p-3">
                 <p className="text-[11px] leading-relaxed text-[var(--muted)]">
-                  云端路线：配置角色人设与对标，粘贴分享链接后一键 ASR 提取；可用 CDN 解析。登录浏览器便于解析需登录的平台。
+                  云端路线：粘贴分享链接后，CDN 接口秒级解析直链，再下载到本地（预览只播本地文件）；随后才做 ASR。一键提取会等转写结束才出全文，下载完成后右侧会先出视频。
                 </p>
           <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)]">
             <button
@@ -1017,7 +1114,23 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
                   </select>
                   <ActionBtn
                     disabled={!!busy || !extractText.trim()}
-                    onClick={() => run('仿写', () => api.scriptRewrite(session.path, extractText, intensity))}
+                    onClick={() => {
+                      void (async () => {
+                        try {
+                          const { settings } = await api.getSettings()
+                          const hasKey = Boolean((settings.rewrite_api_key || '').trim())
+                          if (!hasKey) {
+                            const ok = window.confirm(
+                              '未配置文本大模型 Key。\n\n确定用本地规则润色（效果有限）？\n取消后请到「设置 → ① 文案」填写 Key。',
+                            )
+                            if (!ok) return
+                          }
+                          await run('仿写', () => api.scriptRewrite(session.path, extractText, intensity))
+                        } catch (e) {
+                          setLog(e instanceof Error ? e.message : String(e))
+                        }
+                      })()
+                    }}
                   >
                     {busy === '仿写' ? '仿写中…' : '仿写生成'}
                   </ActionBtn>
@@ -1071,7 +1184,10 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
                   <ActionBtn
                     disabled={!!busy || !legalInput.trim()}
                     onClick={() =>
-                      run('AI法务', () => api.scriptLegal(session.path, legalInput, legalSource))
+                      void (async () => {
+                        if (!(await ensureLlmReady('AI法务审查'))) return
+                        await run('AI法务', () => api.scriptLegal(session.path, legalInput, legalSource))
+                      })()
                     }
                   >
                     {busy === 'AI法务' ? '审查中…' : 'AI法务审查'}
@@ -1091,19 +1207,53 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
       </Panel>
 
       <Panel title="竖屏预览 9:16" className="lg:sticky lg:top-4 lg:self-start">
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <span className="text-[11px] text-[var(--muted)]">参考视频</span>
+          {preview && (
+            <button
+              type="button"
+              className="rounded border border-[var(--accent)]/40 px-2 py-0.5 text-[10px] font-medium text-[var(--accent)] hover:bg-[var(--select-bg)]"
+              onClick={() => setTheaterOpen(true)}
+            >
+              应用内全屏
+            </button>
+          )}
+        </div>
         <div className="mx-auto w-full max-w-[280px]">
           <div className="relative aspect-[9/16] overflow-hidden rounded-2xl border border-[var(--border)] bg-black shadow-lg">
             {preview ? (
-              <PhoneFitVideo src={preview} controls />
+              <PhoneFitVideo key={session.preview_video || 'preview'} src={preview} controls preload="metadata" />
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center text-xs text-[var(--muted)]">
                 <span className="text-2xl opacity-40">▶</span>
-                <span>解析 CDN 或提取口播后</span>
-                <span>在此显示竖屏预览（横屏素材自适应留黑边）</span>
+                {activeExtractJob ? (
+                  <>
+                    <span className="text-[var(--accent)]">
+                      {activeExtractJob.status === 'queued' ? '排队中…' : '提取进行中…'}
+                    </span>
+                    <span className="leading-relaxed">
+                      {activeExtractJob.message ||
+                        'CDN 解析很快；正在下载到本地后才会出预览，随后才 ASR'}
+                    </span>
+                    <span className="opacity-70">
+                      {Math.round(Math.max(0, Math.min(1, activeExtractJob.progress || 0)) * 100)}%
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span>CDN 解析本身很快</span>
+                    <span>但会先下载到本地再显示预览（不是边播边拉远程）</span>
+                  </>
+                )}
               </div>
             )}
           </div>
         </div>
+        {activeExtractJob && preview && (
+          <p className="mt-2 text-center text-[10px] text-[var(--muted)]">
+            视频已就绪 · 文案 ASR 仍在后台进行（{activeExtractJob.message || '转写中'}）
+          </p>
+        )}
         {session.cdn_md && (
           <details className="mt-3 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-[10px]">
             <summary className="cursor-pointer text-[var(--muted)]">CDN 信息</summary>
@@ -1111,6 +1261,13 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
           </details>
         )}
       </Panel>
+
+      <InAppVideoTheater
+        open={theaterOpen && !!preview}
+        src={preview || ''}
+        title="参考视频 · 应用内全屏"
+        onClose={() => setTheaterOpen(false)}
+      />
     </div>
   )
 }

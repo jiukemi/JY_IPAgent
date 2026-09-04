@@ -66,6 +66,23 @@ async def transcript(
     return StageResult(log=data.get("log", ""), data=data)
 
 
+@router.post("/prepare_media")
+async def prepare_media(
+    session_path: str = Form(...),
+    media: UploadFile = File(...),
+) -> dict:
+    """Save local video/audio for a queued script_extract job (no ASR yet)."""
+    if not media.filename:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=400, detail="请上传媒体文件")
+    session = ensure_session_dir(session_path)
+    ext = "." + media.filename.rsplit(".", 1)[-1] if "." in media.filename else ".mp4"
+    dest = session / f"upload_ref{ext}"
+    dest.write_bytes(await media.read())
+    return {"ok": True, "ref_media": str(dest.resolve())}
+
+
 @router.post("/extract", response_model=StageResult)
 async def extract(
     session_path: str = Form(...),

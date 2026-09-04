@@ -44,21 +44,30 @@ from workflow.session import ensure_session_dir
 
 
 def _preview_path(session: Path, meta: dict | None = None) -> str | None:
-    """Prefer full downloaded video; fall back to short UI clip only when full file missing."""
+    """Page preview prefers a short local clip; full download is for ASR only.
+
+    Never returns a remote CDN URL — UI must only play files under the session.
+    Never runs ffmpeg here (snapshot/API must stay fast).
+    """
     meta = meta or load_reference_meta(session)
-    local = meta.get("local_video") or ""
-    if local and Path(local).is_file():
-        return local
-    full = session / "reference_from_cdn.mp4"
-    if full.is_file():
-        return str(full.resolve())
     ui = meta.get("ui_preview") or ""
-    if ui and Path(ui).is_file():
-        return ui
+    if ui and Path(ui).is_file() and not _is_http_url(ui):
+        return str(Path(ui).resolve())
     ui_file = session / "reference_ui_preview.mp4"
     if ui_file.is_file():
         return str(ui_file.resolve())
+    local = meta.get("local_video") or ""
+    if local and not _is_http_url(local) and Path(local).is_file():
+        return str(Path(local).resolve())
+    full = session / "reference_from_cdn.mp4"
+    if full.is_file():
+        return str(full.resolve())
     return None
+
+
+def _is_http_url(value: str) -> bool:
+    v = (value or "").strip().lower()
+    return v.startswith("http://") or v.startswith("https://")
 
 
 def session_storage_md(session_dir: str) -> str:
@@ -114,9 +123,19 @@ def _cdn_md(result: ExtractResult) -> str:
 
         parts.append(f"**标题**：{result.title}")
 
-    if result.video_url:
+    local = result.local_video or ""
+    if local and Path(local).is_file():
+        size_mb = Path(local).stat().st_size / (1024 * 1024)
+        parts.append(f"**本地缓存（页面只播这个，不连 CDN）**：`{local}`（{size_mb:.1f} MB）")
+    ui = result.ui_preview or ""
+    if ui and Path(ui).is_file() and ui != local:
+        parts.append(f"**轻量预览片段**：`{ui}`")
 
-        parts.append(f"**CDN 直链**：\n`{result.video_url}`")
+    if result.video_url:
+        parts.append(
+            "**CDN 直链（仅解析后下载一次，勿反复打开）**：\n"
+            f"`{result.video_url}`"
+        )
 
     if result.cdn_provider:
 

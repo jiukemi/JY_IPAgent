@@ -112,8 +112,22 @@ def run_edge_tts(text: str, output_mp3: Path, voice: str) -> Path:
 
 def convert_to_wav(ffmpeg: str, src: Path, dst: Path, sample_rate: int = 16000) -> Path:
     subprocess.run(
-        [ffmpeg, "-y", "-i", str(src), "-ac", "1", "-ar", str(sample_rate), str(dst)],
+        [
+            ffmpeg,
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(src),
+            "-ac",
+            "1",
+            "-ar",
+            str(sample_rate),
+            str(dst),
+        ],
         check=True,
+        capture_output=True,
     )
     return dst
 
@@ -392,6 +406,24 @@ def _qwen3_local_subprocess(
     _run_backend_subprocess(cfg, cmd, on_progress=on_progress, progress_text=text)
 
 
+def _wav_ready(path: Path, sample_rate: int) -> bool:
+    """True if path is already mono PCM wav at the requested rate."""
+    if path.suffix.lower() != ".wav" or not path.is_file():
+        return False
+    try:
+        import wave
+
+        with wave.open(str(path), "rb") as wf:
+            return (
+                wf.getnchannels() == 1
+                and wf.getframerate() == sample_rate
+                and wf.getsampwidth() in (2, 3, 4)
+                and wf.getnframes() > 0
+            )
+    except Exception:
+        return False
+
+
 def _prepare_reference_wav(
     ffmpeg: str,
     ref_path: str,
@@ -400,8 +432,12 @@ def _prepare_reference_wav(
     *,
     force: bool = False,
 ) -> str:
+    """Reuse saved wav when already correct — do NOT re-ffmpeg every clone run."""
     src = Path(ref_path)
-    if not force and src.suffix.lower() == ".wav":
+    if not force and _wav_ready(src, sample_rate):
+        return str(src.resolve())
+    if not force and src.suffix.lower() == ".wav" and src.is_file():
+        # Already wav (any rate): IndexTTS/Cosy usually accept it; skip convert to stay fast
         return str(src.resolve())
     dst = work_dir / f"ref_{sample_rate}.wav"
     convert_to_wav(ffmpeg, src, dst, sample_rate=sample_rate)
@@ -554,7 +590,7 @@ def synthesize(
             ref_prepared = None
             if ref:
                 ref_prepared = _prepare_reference_wav(
-                    ffmpeg_bin, ref, output_dir, sample_rate=22050, force=(mode == "clone")
+                    ffmpeg_bin, ref, output_dir, sample_rate=22050
                 )
             clone_prompt = prompt_text or _saved_prompt
             _indextts_subprocess(

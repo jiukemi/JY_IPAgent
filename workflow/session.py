@@ -951,6 +951,36 @@ def snapshot_script_legal(session_path: str, text: str) -> None:
         (p / "script_legal.txt").write_text(body, encoding="utf-8")
 
 
+PUBLISH_TOPIC_MAX = 5  # Douyin / most short-video creators allow ≤5 topic chips
+
+
+def normalize_publish_topics(raw: list[str] | str | None, *, limit: int = PUBLISH_TOPIC_MAX) -> list[str]:
+    """Dedupe + strip #; cap length so creator-center topic binding won't hang."""
+    items: list[str] = []
+    if isinstance(raw, str):
+        text = raw.replace("，", ",").replace("#", " ")
+        parts = [t.strip() for t in text.replace(",", " ").split() if t.strip()]
+        if len(parts) <= 1 and ("," in raw or "，" in raw):
+            parts = [t.strip() for t in text.split(",") if t.strip()]
+        items = parts
+    elif isinstance(raw, list):
+        items = [str(t).strip() for t in raw if str(t).strip()]
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in items:
+        tag = t.lstrip("#").strip()
+        if not tag:
+            continue
+        key = tag.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(tag)
+        if len(out) >= max(1, int(limit or PUBLISH_TOPIC_MAX)):
+            break
+    return out
+
+
 def publish_copy_path(session_path: str | Path) -> Path:
     return ensure_session_dir(session_path) / "publish_copy.json"
 
@@ -968,13 +998,7 @@ def load_publish_copy(session_path: str | Path) -> dict:
         data = json.loads(fp.read_text(encoding="utf-8"))
         if not isinstance(data, dict):
             return {"title": "", "subtitle": "", "description": "", "topics": []}
-        topics = data.get("topics") or []
-        if isinstance(topics, str):
-            topics = [t.strip().lstrip("#") for t in topics.replace("，", " ").split() if t.strip()]
-        elif isinstance(topics, list):
-            topics = [str(t).strip().lstrip("#") for t in topics if str(t).strip()]
-        else:
-            topics = []
+        topics = normalize_publish_topics(data.get("topics") or [])
         return {
             "title": str(data.get("title") or "").strip(),
             "subtitle": str(data.get("subtitle") or "").strip(),
@@ -997,7 +1021,7 @@ def save_publish_copy(
         "title": (title or "").strip(),
         "subtitle": (subtitle or "").strip(),
         "description": (description or "").strip(),
-        "topics": [str(t).strip().lstrip("#") for t in (topics or []) if str(t).strip()],
+        "topics": normalize_publish_topics(topics),
     }
     fp = publish_copy_path(session_path)
     fp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1137,6 +1161,13 @@ def session_ui_snapshot(path_str: str) -> dict:
         lines.append(f"已保存配音: {len(dubs) - 1} 条")
     if final is not None and final.exists():
         lines.append(f"成片: {final}")
+        try:
+            from workflow.mp4_faststart import ensure_mp4_faststart
+
+            # Historical HeyGem/SadTalker outputs often leave moov at EOF → preview "卡住加载"
+            ensure_mp4_faststart(final)
+        except Exception:
+            pass
     if len(lips) > 1:
         lines.append(f"已保存口播: {len(lips) - 1} 条")
     selected = resolve_selected_dub_path(p)

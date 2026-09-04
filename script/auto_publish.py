@@ -41,7 +41,9 @@ def _normalize_platforms(platforms: list[str] | None) -> list[str]:
 
 
 def _build_caption(title: str, description: str, topics: list[str] | None) -> tuple[str, list[str], str]:
-    tags = [t.strip().lstrip("#") for t in (topics or []) if str(t).strip()]
+    from workflow.session import normalize_publish_topics
+
+    tags = normalize_publish_topics(topics)
     caption = (description or title or "").strip()
     if tags:
         caption = (caption + "\n" + " ".join(f"#{t}" for t in tags)).strip()

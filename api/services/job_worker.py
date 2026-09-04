@@ -51,10 +51,10 @@ def _load_pending() -> list[dict[str, str]]:
 
 
 def _save_pending(items: list[dict[str, str]]) -> None:
+    from workflow.job_queue import _atomic_write
+
     PENDING_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = PENDING_PATH.with_suffix(".tmp")
-    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(PENDING_PATH)
+    _atomic_write(PENDING_PATH, items)
 
 
 def _pending_add(session_path: str, job_id: str) -> None:
@@ -125,9 +125,26 @@ def _thin_result(result: dict[str, Any] | None) -> dict[str, Any] | None:
         "ready",
         "missing",
         "exit_code",
+        # script_extract / subtitle_asr — UI needs these to refresh panels
+        "script",
+        "preview_video",
+        "cdn_md",
+        "script_updated",
+        "timing_note",
+        "timing_mode",
+        "segment_count",
+        "split_chars",
     ):
         if k in result and result[k] is not None:
-            out[k] = result[k]
+            val = result[k]
+            # Cap huge transcripts in the job index (full text already on disk)
+            if k == "script" and isinstance(val, str) and len(val) > 80_000:
+                val = val[:80_000] + "\n…(已截断，完整文案见会话 script_extract.txt)"
+            out[k] = val
+    if "cues" in result and isinstance(result["cues"], list):
+        # Keep cues for subtitle_asr UI refill (cap extreme sizes)
+        cues = result["cues"]
+        out["cues"] = cues[:2000] if len(cues) > 2000 else cues
     if "assignments" in result and isinstance(result["assignments"], list):
         out["assignments"] = result["assignments"]
         out["assignment_count"] = len(result["assignments"])

@@ -13,7 +13,14 @@ from fastapi.responses import StreamingResponse
 
 from api.schemas import StageResult
 from api.services.stages import run_lipsync
-from avatar.catalog import delete_avatar, get_avatar, list_avatars, save_avatar
+from avatar.catalog import (
+    delete_avatar,
+    ensure_avatar_poster,
+    ensure_avatar_streamable,
+    get_avatar,
+    list_avatars,
+    save_avatar,
+)
 from avatar.heygem_runtime import (
     heygem_service_status,
     start_heygem_stream_lines,
@@ -29,9 +36,13 @@ _ROOT = Path(__file__).resolve().parent.parent.parent
 
 
 def _avatar_row(entry) -> dict:
+    ensure_avatar_poster(entry)
     row = entry.to_dict()
     row["label"] = entry.name
-    row["preview_url"] = f"/api/avatar/preview?id={entry.id}"
+    # media_url = 原素材；thumb_url = 网格封面（勿把视频 URL 塞进 <img>）
+    row["media_url"] = f"/api/avatar/media?id={entry.id}"
+    row["preview_url"] = f"/api/avatar/media?id={entry.id}"
+    row["thumb_url"] = f"/api/avatar/thumb?id={entry.id}"
     row["supports_heygem"] = entry.supports_backend("heygem")
     row["supports_sadtalker"] = entry.supports_backend("sadtalker")
     return row
@@ -136,27 +147,89 @@ def library() -> list[dict]:
     return [_avatar_row(e) for e in list_avatars()]
 
 
-@router.get("/preview")
-def preview(id: str = Query(..., alias="id")):
+@router.get("/thumb")
+def thumb(id: str = Query(..., alias="id")):
     from workflow.file_serve import safe_file_response
 
     entry = get_avatar(id)
     if not entry:
         raise HTTPException(status_code=404, detail="形象不存在")
-    path = entry.preview_path
+    ensure_avatar_poster(entry)
+    path = entry.poster_path
+    if not path and entry.source_kind == "portrait":
+        path = entry.preview_path
     if not path:
-        raise HTTPException(status_code=404, detail="无预览")
+        raise HTTPException(status_code=404, detail="无封面")
+    # Never serve video as thumb — browsers show broken-image icon in <img>
+    if path.suffix.lower() in {".mp4", ".mov", ".webm", ".mkv", ".m4v", ".avi"}:
+        raise HTTPException(status_code=404, detail="封面未生成")
     ext = path.suffix.lower()
     media = {
-        ".mp4": "video/mp4",
-        ".mov": "video/quicktime",
-        ".webm": "video/webm",
         ".jpg": "image/jpeg",
         ".jpeg": "image/jpeg",
         ".png": "image/png",
         ".webp": "image/webp",
+        ".bmp": "image/bmp",
+    }.get(ext, "image/jpeg")
+    try:
+        return safe_file_response(path, media_type=media, cache_control="private, max-age=86400")
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="封面文件缺失") from exc
+
+
+@router.get("/media")
+def media(id: str = Query(..., alias="id")):
+    """Original reference video / portrait (for 查看原素材)."""
+    from workflow.file_serve import safe_file_response
+
+    entry = get_avatar(id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="形象不存在")
+    # Remux moov-to-front once so Chromium can stream instead of buffering entire file
+    path = ensure_avatar_streamable(entry) or entry.preview_path
+    if not path:
+        raise HTTPException(status_code=404, detail="原素材缺失")
+    ext = path.suffix.lower()
+    media_type = {
+        ".mp4": "video/mp4",
+        ".mov": "video/quicktime",
+        ".webm": "video/webm",
+        ".mkv": "video/x-matroska",
+        ".m4v": "video/mp4",
+        ".avi": "video/x-msvideo",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".webp": "image/webp",
+        ".bmp": "image/bmp",
     }.get(ext, "application/octet-stream")
-    return safe_file_response(path, media_type=media)
+    try:
+        return safe_file_response(path, media_type=media_type, cache_control="private, max-age=3600")
+    except (FileNotFoundError, ValueError) as exc:
+        raise HTTPException(status_code=404, detail="原素材文件缺失") from exc
+
+
+@router.post("/prepare/{avatar_id}")
+def prepare_avatar(avatar_id: str) -> dict:
+    """Ensure poster + faststart remux before opening lightbox (optional warm-up)."""
+    entry = get_avatar(avatar_id)
+    if not entry:
+        raise HTTPException(status_code=404, detail="形象不存在")
+    poster = ensure_avatar_poster(entry)
+    media_path = ensure_avatar_streamable(entry)
+    return {
+        "ok": True,
+        "thumb_url": f"/api/avatar/thumb?id={entry.id}",
+        "media_url": f"/api/avatar/media?id={entry.id}",
+        "poster_ready": bool(poster and Path(poster).is_file()),
+        "streamable": bool(media_path and Path(media_path).is_file()),
+    }
+
+
+@router.get("/preview")
+def preview(id: str = Query(..., alias="id")):
+    """Backward-compatible alias → original media."""
+    return media(id)
 
 
 @router.post("/register", response_model=StageResult)

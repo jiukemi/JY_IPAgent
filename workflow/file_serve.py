@@ -1,11 +1,11 @@
-"""Safe static file responses (avoids Content-Length mismatch on Windows)."""
+"""Safe static file responses with HTTP Range support (needed for <audio>/<video>)."""
 
 from __future__ import annotations
 
 import mimetypes
 from pathlib import Path
 
-from starlette.responses import Response
+from starlette.responses import FileResponse, Response
 
 
 def safe_file_bytes(path: Path) -> bytes:
@@ -18,20 +18,35 @@ def safe_file_bytes(path: Path) -> bytes:
     return data
 
 
-def safe_file_response(path: Path, media_type: str | None = None) -> Response:
+def safe_file_response(
+    path: Path,
+    media_type: str | None = None,
+    *,
+    cache_control: str = "no-store, no-cache, must-revalidate",
+) -> Response:
+    """Serve a local file without loading it entirely into memory.
+
+    Uses Starlette FileResponse so browsers can Range-seek media (fixes
+    asset-center / BGM preview that previously hung or failed to play).
+    """
     p = path.resolve()
-    data = safe_file_bytes(p)
+    if not p.is_file():
+        raise FileNotFoundError(str(p))
+    try:
+        size = p.stat().st_size
+    except OSError as exc:
+        raise FileNotFoundError(str(p)) from exc
+    if size < 1:
+        raise ValueError(f"文件为空: {p}")
     if not media_type:
         media_type = mimetypes.guess_type(p.name)[0] or "application/octet-stream"
-    return Response(
-        content=data,
+    headers = {"Cache-Control": cache_control}
+    if "no-store" in cache_control or "no-cache" in cache_control:
+        headers["Pragma"] = "no-cache"
+    return FileResponse(
+        path=p,
         media_type=media_type,
-        headers={
-            "Content-Length": str(len(data)),
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "no-store, no-cache, must-revalidate",
-            "Pragma": "no-cache",
-        },
+        headers=headers,
     )
 
 

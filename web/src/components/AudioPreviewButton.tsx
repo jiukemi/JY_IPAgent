@@ -1,19 +1,33 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { playableUrl } from '../api/client'
 
 let sharedAudio: HTMLAudioElement | null = null
 let sharedOwner: symbol | null = null
 
 type Props = {
   url: string | null | undefined
+  /** Absolute disk path — desktop plays via agent-media (no HTTP). */
+  localPath?: string | null
   size?: 'sm' | 'md'
   className?: string
   title?: string
 }
 
-export function AudioPreviewButton({ url, size = 'sm', className = '', title = '试听' }: Props) {
+function isInstantAudioUrl(url: string) {
+  return url.startsWith('data:') || url.startsWith('blob:') || url.startsWith('agent-media:')
+}
+
+export function AudioPreviewButton({
+  url,
+  localPath,
+  size = 'sm',
+  className = '',
+  title = '试听',
+}: Props) {
   const owner = useRef(Symbol('preview'))
   const [playing, setPlaying] = useState(false)
   const [missing, setMissing] = useState(false)
+  const resolved = useMemo(() => playableUrl(url, { localPath }), [url, localPath])
 
   useEffect(() => {
     return () => {
@@ -31,7 +45,7 @@ export function AudioPreviewButton({ url, size = 'sm', className = '', title = '
     }
     setPlaying(false)
     setMissing(false)
-  }, [url])
+  }, [resolved])
 
   const stopSelf = useCallback(() => {
     if (sharedOwner === owner.current && sharedAudio) {
@@ -45,7 +59,7 @@ export function AudioPreviewButton({ url, size = 'sm', className = '', title = '
     async (e: React.MouseEvent) => {
       e.stopPropagation()
       e.preventDefault()
-      if (!url || missing) return
+      if (!resolved || missing) return
 
       if (playing) {
         stopSelf()
@@ -56,9 +70,11 @@ export function AudioPreviewButton({ url, size = 'sm', className = '', title = '
         sharedAudio.pause()
       }
 
-      const audio = sharedAudio ?? new Audio()
+      const audio = new Audio()
+      sharedAudio?.pause()
       sharedAudio = audio
       sharedOwner = owner.current
+      audio.preload = isInstantAudioUrl(resolved) ? 'auto' : 'metadata'
 
       audio.onended = () => setPlaying(false)
       audio.onpause = () => {
@@ -69,20 +85,21 @@ export function AudioPreviewButton({ url, size = 'sm', className = '', title = '
         setPlaying(false)
       }
 
-      audio.src = url
+      audio.src = resolved
       try {
-        await audio.play()
+        const p = audio.play()
         setPlaying(true)
         setMissing(false)
+        await p
       } catch {
         setMissing(true)
         setPlaying(false)
       }
     },
-    [url, missing, playing, stopSelf],
+    [resolved, missing, playing, stopSelf],
   )
 
-  const dim = !url || missing
+  const dim = !resolved || missing
   const pad = size === 'md' ? 'h-9 w-9 text-base' : 'h-7 w-7 text-xs'
 
   return (

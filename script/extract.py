@@ -68,6 +68,9 @@ def transcribe_whisper(
     py = whisper_python(cfg)
     env = os.environ.copy()
     env.setdefault("HF_ENDPOINT", cfg.get("hf_endpoint", "https://hf-mirror.com"))
+    env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    out_path = wav_path.with_name(wav_path.stem + ".whisper.txt")
     cmd = [
         py,
         str(runner),
@@ -78,50 +81,118 @@ def transcribe_whisper(
         "--language",
         language,
     ]
-    result = subprocess.run(
-        cmd,
-        cwd=whisper_dir,
-        capture_output=True,
-        text=True,
-        check=False,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-    )
-    if result.returncode != 0:
-        err = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"Whisper 转写失败:\n{err}")
-    text = (result.stdout or "").strip()
+    text = _write_and_read_asr_out(cmd, cwd=whisper_dir, env=env, out_path=out_path)
     if not text:
         raise RuntimeError("Whisper 未识别到有效口播文案")
     _emit(on_progress, 0.95, "转写完成")
     return text
 
 
-def _funasr_python(cfg: dict) -> str:
-    """Prefer a dedicated FunASR venv; fall back to the main python."""
+def _funasr_python_candidates(cfg: dict) -> list[str]:
+    """Ordered python interpreters that may host FunASR."""
     root = Path(cfg.get("paths", {}).get("funasr_dir", "tools/FunASR"))
+    out: list[str] = []
     for sub in (".venv", "venv"):
         win = root / sub / "Scripts" / "python.exe"
         if win.exists():
-            return str(win)
+            out.append(str(win.resolve()))
         unix = root / sub / "bin" / "python"
         if unix.exists():
-            return str(unix)
-    return sys.executable
+            out.append(str(unix.resolve()))
+    out.append(sys.executable)
+    # de-dupe preserving order
+    seen: set[str] = set()
+    uniq: list[str] = []
+    for p in out:
+        key = p.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(p)
+    return uniq
 
 
-def _funasr_available(cfg: dict) -> bool:
-    py = _funasr_python(cfg)
+def _python_has_funasr(py: str) -> bool:
+    """Require funasr + torch (AutoModel needs torch; bare import is not enough)."""
     try:
+        # Fail fast when torch is missing (broken FunASR venv).
         result = subprocess.run(
-            [py, "-c", "import funasr"],
+            [
+                py,
+                "-c",
+                "import importlib.util as u;"
+                "assert u.find_spec('torch'), 'no torch';"
+                "import torch, funasr",
+            ],
             capture_output=True,
-            timeout=8,
+            timeout=60,
         )
         return result.returncode == 0
     except Exception:
         return False
+
+
+def _funasr_python(cfg: dict) -> str:
+    """Prefer a dedicated FunASR venv that actually has torch; else system python."""
+    for py in _funasr_python_candidates(cfg):
+        if _python_has_funasr(py):
+            return py
+    # Fall back to venv path (caller will surface a clear install error)
+    cands = _funasr_python_candidates(cfg)
+    return cands[0] if cands else sys.executable
+
+
+def _funasr_available(cfg: dict) -> bool:
+    return any(_python_has_funasr(py) for py in _funasr_python_candidates(cfg))
+
+
+def _decode_pipe(raw: bytes | str | None) -> str:
+    """Decode subprocess output; prefer UTF-8, fall back to GBK on Windows mojibake."""
+    if raw is None:
+        return ""
+    if isinstance(raw, str):
+        # Already decoded (possibly with replacement chars) — try repair if heavily corrupted
+        if raw.count("\ufffd") >= 3:
+            try:
+                return raw.encode("latin-1", errors="ignore").decode("gbk", errors="ignore").strip() or raw
+            except Exception:
+                return raw
+        return raw
+    for enc in ("utf-8", "utf-8-sig", "gbk", "cp936"):
+        try:
+            return raw.decode(enc).strip()
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace").strip()
+
+
+def _write_and_read_asr_out(cmd: list[str], *, cwd: Path, env: dict, out_path: Path) -> str:
+    """Run ASR runner with --out file (UTF-8) to avoid Windows pipe encoding corruption."""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if out_path.exists():
+        out_path.unlink(missing_ok=True)
+    full_cmd = list(cmd) + ["--out", str(out_path.resolve())]
+    result = subprocess.run(
+        full_cmd,
+        cwd=str(cwd.resolve()),
+        capture_output=True,
+        check=False,
+        env=env,
+    )
+    if out_path.is_file() and out_path.stat().st_size > 0:
+        text = out_path.read_text(encoding="utf-8").strip()
+        if text:
+            if result.returncode != 0:
+                # Prefer file content even if process exited oddly after writing
+                return text
+            return text
+    stdout = _decode_pipe(result.stdout)
+    stderr = _decode_pipe(result.stderr)
+    if result.returncode != 0:
+        raise RuntimeError((stderr or stdout or "ASR 进程失败").strip())
+    if not stdout:
+        raise RuntimeError((stderr or "ASR 未识别到有效口播文案").strip())
+    return stdout
 
 
 def transcribe_funasr(
@@ -137,8 +208,11 @@ def transcribe_funasr(
         raise FileNotFoundError(f"FunASR runner 缺失: {runner}")
     if not _funasr_available(cfg):
         raise RuntimeError(
-            "FunASR 未安装。请运行:\n"
-            "  py -3.11 -m pip install funasr modelscope torchaudio"
+            "FunASR 未就绪（需要 funasr + torch）。\n"
+            "请运行：\n"
+            "  .\\scripts\\setup\\setup_funasr.ps1\n"
+            "或在 FunASR 虚拟环境中安装：\n"
+            "  tools\\FunASR\\.venv\\Scripts\\python.exe -m pip install torch torchaudio"
         )
 
     model = script_cfg.get("funasr_model", "sensevoice")
@@ -160,6 +234,8 @@ def transcribe_funasr(
     py = _funasr_python(cfg)
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
+    env["PYTHONUTF8"] = "1"
+    out_path = wav_path.with_name(wav_path.stem + ".funasr.txt")
     cmd = [
         py,
         str(runner.resolve()),
@@ -168,22 +244,18 @@ def transcribe_funasr(
         "--model",
         model,
     ]
-    result = subprocess.run(
-        cmd,
-        cwd=str(funasr_dir.resolve()),
-        capture_output=True,
-        text=True,
-        check=False,
-        encoding="utf-8",
-        errors="replace",
-        env=env,
-    )
-    if result.returncode != 0:
-        err = (result.stderr or result.stdout or "").strip()
-        raise RuntimeError(f"FunASR 转写失败:\n{err}")
-    text = (result.stdout or "").strip()
+    try:
+        text = _write_and_read_asr_out(cmd, cwd=funasr_dir, env=env, out_path=out_path)
+    except RuntimeError as exc:
+        raise RuntimeError(f"FunASR 转写失败:\n{exc}") from exc
     if not text:
         raise RuntimeError("FunASR 未识别到有效口播文案")
+    # Guard: heavily corrupted pipe/file should not be accepted as 口播
+    if text.count("\ufffd") >= max(3, len(text) // 10):
+        raise RuntimeError(
+            "FunASR 输出疑似乱码（编码损坏）。请确认 FunASR 环境已安装 torch，"
+            "或改用 Whisper / 重新提取。"
+        )
     _emit(on_progress, 0.95, "FunASR 转写完成")
     return text
 

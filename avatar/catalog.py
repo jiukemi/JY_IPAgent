@@ -37,6 +37,18 @@ class AvatarEntry:
             return p if p.is_file() else None
         return None
 
+    @property
+    def poster_path(self) -> Path | None:
+        """Grid thumbnail — jpeg for video, portrait image for photos."""
+        if self.source_kind == "portrait" and self.reference_image:
+            p = Path(self.reference_image)
+            return p if p.is_file() else None
+        folder = AVATAR_ROOT / self.id
+        poster = folder / "poster.jpg"
+        if poster.is_file() and poster.stat().st_size > 100:
+            return poster
+        return None
+
     def supports_backend(self, backend: str) -> bool:
         b = (backend or "").lower()
         if b == "heygem":
@@ -56,6 +68,74 @@ class AvatarEntry:
             "backend": self.backend,
             "ai_prompt": self.ai_prompt,
         }
+
+
+def _resolve_ffmpeg() -> str:
+    from pipeline import ensure_ffmpeg
+    from workflow.app_config import load_cfg
+
+    try:
+        return ensure_ffmpeg(load_cfg()["paths"].get("ffmpeg", "ffmpeg"))
+    except Exception:
+        return ensure_ffmpeg("ffmpeg")
+
+
+def ensure_avatar_streamable(entry: AvatarEntry) -> Path | None:
+    """Remux reference video with +faststart so in-app <video> can play without full download."""
+    if entry.source_kind != "video" or not entry.reference_video:
+        p = Path(entry.reference_image) if entry.reference_image else None
+        return p if p and p.is_file() else None
+    from workflow.mp4_faststart import ensure_mp4_faststart
+
+    video = Path(entry.reference_video)
+    if not video.is_file():
+        return None
+    return ensure_mp4_faststart(video)
+
+
+def ensure_avatar_poster(entry: AvatarEntry) -> Path | None:
+    """Create poster.jpg from reference video (lazy). Portraits use the image itself."""
+    if entry.source_kind == "portrait":
+        p = Path(entry.reference_image) if entry.reference_image else None
+        return p if p and p.is_file() else None
+    folder = AVATAR_ROOT / entry.id
+    poster = folder / "poster.jpg"
+    if poster.is_file() and poster.stat().st_size > 100:
+        return poster
+    video = Path(entry.reference_video) if entry.reference_video else None
+    if not video or not video.is_file():
+        return None
+    folder.mkdir(parents=True, exist_ok=True)
+    try:
+        import subprocess
+
+        ffmpeg = _resolve_ffmpeg()
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-ss",
+                "0.5",
+                "-i",
+                str(video),
+                "-frames:v",
+                "1",
+                "-q:v",
+                "4",
+                str(poster),
+            ],
+            check=True,
+            capture_output=True,
+            timeout=60,
+        )
+        if poster.is_file() and poster.stat().st_size > 100:
+            return poster
+    except Exception:
+        return None
+    return None
 
 
 def _load_index() -> list[dict]:
@@ -161,6 +241,8 @@ def save_avatar(
         backend=(backend or default_backend).lower(),
         ai_prompt=(ai_prompt or "").strip(),
     )
+    ensure_avatar_poster(entry)
+    ensure_avatar_streamable(entry)
     items = _load_index()
     items.append(entry.to_dict())
     _save_index(items)

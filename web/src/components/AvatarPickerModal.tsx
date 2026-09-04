@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api } from '../api/client'
+import { api, mediaUrl } from '../api/client'
 import { AlertModal, parseApiError } from './AlertModal'
 import { FileDropZone } from './FileDropZone'
 
@@ -9,10 +9,47 @@ export type AvatarItem = {
   label: string
   source_kind: 'video' | 'portrait'
   preview_url: string
+  thumb_url?: string
+  media_url?: string
+  reference_video?: string
+  reference_image?: string
   supports_heygem: boolean
   supports_sadtalker: boolean
   ai_prompt?: string
   created_at?: string
+}
+
+/** Grid cover: only image URLs. Never put video/mp4 into <img> (shows broken-image icon). */
+function AvatarCover({
+  item,
+  className = 'h-full w-full object-cover',
+}: {
+  item: AvatarItem
+  className?: string
+}) {
+  const [failed, setFailed] = useState(false)
+  const src =
+    (item.source_kind === 'portrait'
+      ? mediaUrl(item.reference_image) || item.thumb_url || item.media_url || item.preview_url
+      : item.thumb_url) ||
+    ''
+  if (!src || failed) {
+    return (
+      <div className="flex h-full w-full flex-col items-center justify-center gap-1 bg-[var(--panel-2)] text-[10px] text-[var(--muted)]">
+        <span className="text-lg opacity-60">{item.source_kind === 'video' ? '▶' : '🖼'}</span>
+        <span>{item.source_kind === 'video' ? '视频形象' : '肖像'}</span>
+      </div>
+    )
+  }
+  return (
+    <img
+      src={src}
+      alt={item.name}
+      className={className}
+      loading="lazy"
+      onError={() => setFailed(true)}
+    />
+  )
 }
 
 type Props = {
@@ -84,13 +121,63 @@ export function AvatarPickerModal({ open, selectedId, backend, onClose, onSelect
   const [alert, setAlert] = useState<{ title: string; message: string; variant: 'error' | 'success' | 'info' } | null>(
     null,
   )
+  const [viewing, setViewing] = useState<AvatarItem | null>(null)
+  const [viewReady, setViewReady] = useState(false)
+  const [viewPreparing, setViewPreparing] = useState(false)
+  const [viewMediaUrl, setViewMediaUrl] = useState('')
+
+  const openOriginal = async (item: AvatarItem) => {
+    setViewing(item)
+    setViewReady(false)
+    setViewPreparing(true)
+    setViewMediaUrl('')
+    try {
+      if (item.source_kind === 'video') {
+        const local = mediaUrl(item.reference_video)
+        if (local) {
+          setViewMediaUrl(local)
+        } else {
+          const prep = await api.prepareAvatar(item.id)
+          setViewMediaUrl(`${prep.media_url || mediaOf(item)}&v=${Date.now()}`)
+        }
+      } else {
+        setViewMediaUrl(mediaOf(item))
+      }
+    } catch {
+      setViewMediaUrl(mediaOf(item))
+    } finally {
+      setViewPreparing(false)
+    }
+  }
+
+  const openInSystemPlayer = async (item: AvatarItem) => {
+    const desktop = (
+      window as unknown as {
+        agentDesktop?: { openPath?: (p: string) => Promise<{ ok: boolean; message?: string }> }
+      }
+    ).agentDesktop
+    const local = item.reference_video || item.reference_image || ''
+    if (!desktop?.openPath || !local) {
+      setAlert({ title: '无法打开', message: '仅桌面端可调用系统播放器', variant: 'info' })
+      return
+    }
+    const res = await desktop.openPath(local)
+    if (!res.ok) {
+      setAlert({ title: '打开失败', message: res.message || '系统播放器无法打开该文件', variant: 'error' })
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       setItems(await api.avatarLibrary())
-    } catch {
+    } catch (e) {
       setItems([])
+      setAlert({
+        title: '形象库加载失败',
+        message: e instanceof Error ? e.message : String(e),
+        variant: 'error',
+      })
     } finally {
       setLoading(false)
     }
@@ -102,13 +189,14 @@ export function AvatarPickerModal({ open, selectedId, backend, onClose, onSelect
 
   if (!open) return null
 
-  const filtered = items.filter((item) => {
+  const compatible = (item: AvatarItem) => {
     if (backend === 'heygem') return item.supports_heygem
-    if (backend === 'sadtalker') {
-      return item.supports_sadtalker
-    }
+    if (backend === 'sadtalker') return item.supports_sadtalker
     return true
-  })
+  }
+
+  const mediaOf = (item: AvatarItem) =>
+    mediaUrl(item.reference_video || item.reference_image) || item.media_url || item.preview_url
 
   const register = async () => {
     if (!regFile) {
@@ -239,60 +327,83 @@ export function AvatarPickerModal({ open, selectedId, backend, onClose, onSelect
               <>
                 {loading ? (
                   <p className="text-sm text-[var(--muted)]">加载中…</p>
-                ) : filtered.length === 0 ? (
+                ) : items.length === 0 ? (
                   <div className="space-y-3 text-sm text-[var(--muted)]">
-                    <p>暂无可用形象。</p>
+                    <p>形象库为空。</p>
                     <button
                       type="button"
                       onClick={() => setTab('register')}
                       className="rounded-lg border border-[var(--accent)]/40 bg-[var(--select-bg)] px-3 py-2 text-left text-xs text-[var(--accent)] hover:border-[var(--accent)]"
                     >
-                      → 去「上传注册」：推荐上传 10–20 秒正脸口播 mp4，效果最佳
+                      → 去「上传注册」：推荐上传 10–20 秒正脸口播 mp4
                     </button>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {filtered.map((item) => (
-                      <div
-                        key={item.id}
-                        className={`rounded-xl border p-2 ${
-                          selectedId === item.id
-                            ? 'border-[var(--accent)] bg-[var(--select-bg)]'
-                            : 'border-[var(--border)] bg-[var(--bg)]'
-                        }`}
-                      >
-                        <button type="button" className="w-full text-left" onClick={() => onSelect(item)}>
-                          {item.source_kind === 'portrait' ? (
-                            <img
-                              src={item.preview_url}
-                              alt={item.name}
-                              className="mb-2 aspect-square w-full rounded-lg object-cover"
-                            />
-                          ) : (
-                            <video
-                              src={item.preview_url}
-                              className="mb-2 aspect-square w-full rounded-lg object-cover"
-                              muted
-                              playsInline
-                              preload="metadata"
-                            />
-                          )}
-                          <div className="truncate text-xs font-medium">{item.name}</div>
-                          <div className="text-[10px] text-[var(--muted)]">
-                            {item.source_kind === 'video' ? 'HeyGem 视频' : 'SadTalker 肖像'}
+                  <>
+                    <p className="mb-3 text-[10px] text-[var(--muted)]">
+                      共 {items.length} 个形象
+                      {backend === 'heygem' || backend === 'sadtalker'
+                        ? ` · 当前引擎可用 ${items.filter(compatible).length} 个（其余可查看原素材，选用需切换引擎）`
+                        : ''}
+                      。点封面选用；「查看」可播原视频 / 看原图。
+                    </p>
+                    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                      {items.map((item) => {
+                        const ok = compatible(item)
+                        return (
+                          <div
+                            key={item.id}
+                            className={`rounded-xl border p-2 ${
+                              selectedId === item.id
+                                ? 'border-[var(--accent)] bg-[var(--select-bg)]'
+                                : 'border-[var(--border)] bg-[var(--bg)]'
+                            } ${ok ? '' : 'opacity-70'}`}
+                          >
+                            <button
+                              type="button"
+                              className="w-full text-left disabled:cursor-not-allowed"
+                              disabled={!ok || busy}
+                              title={ok ? '点击选用' : '与当前引擎不匹配，可查看原素材或切换引擎'}
+                              onClick={() => {
+                                if (ok) onSelect(item)
+                              }}
+                            >
+                              <div className="relative mb-2 aspect-square w-full overflow-hidden rounded-lg bg-[var(--panel-2)]">
+                                <AvatarCover item={item} />
+                                {item.source_kind === 'video' && (
+                                  <span className="absolute bottom-1 left-1 rounded bg-black/60 px-1.5 py-0.5 text-[9px] text-white">
+                                    视频
+                                  </span>
+                                )}
+                              </div>
+                              <div className="truncate text-xs font-medium">{item.name}</div>
+                              <div className="text-[10px] text-[var(--muted)]">
+                                {item.source_kind === 'video' ? 'HeyGem 视频' : 'SadTalker 肖像'}
+                                {!ok ? ' · 当前引擎不可用' : ''}
+                              </div>
+                            </button>
+                            <div className="mt-1.5 flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void openOriginal(item)}
+                                className="text-[10px] text-[var(--accent)] hover:underline"
+                              >
+                                查看原素材
+                              </button>
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => void remove(item.id)}
+                                className="text-[10px] text-red-500 hover:underline"
+                              >
+                                删除
+                              </button>
+                            </div>
                           </div>
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => void remove(item.id)}
-                          className="mt-1 text-[10px] text-red-500 hover:underline"
-                        >
-                          删除
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                        )
+                      })}
+                    </div>
+                  </>
                 )}
               </>
             )}
@@ -445,6 +556,105 @@ export function AvatarPickerModal({ open, selectedId, backend, onClose, onSelect
           </div>
         </div>
       </div>
+
+      {viewing && (
+        <div
+          className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 p-4"
+          role="presentation"
+        >
+          <div className="relative w-full max-w-3xl rounded-xl border border-[var(--border)] bg-[var(--panel)] p-3 shadow-2xl">
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <p className="truncate text-sm font-medium">
+                {viewing.name}
+                <span className="ml-2 text-[10px] font-normal text-[var(--muted)]">
+                  {viewing.source_kind === 'video' ? '原参考视频' : '原肖像图'}
+                </span>
+              </p>
+              <div className="flex shrink-0 items-center gap-2">
+                {viewing.source_kind === 'video' && (viewing.reference_video || viewing.reference_image) && (
+                  <button
+                    type="button"
+                    className="rounded-lg border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--panel-2)]"
+                    onClick={() => void openInSystemPlayer(viewing)}
+                    title="用系统播放器打开本地文件（秒开）"
+                  >
+                    系统播放器
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="rounded-lg border border-[var(--border)] px-2 py-1 text-xs hover:bg-[var(--panel-2)]"
+                  onClick={() => {
+                    setViewing(null)
+                    setViewMediaUrl('')
+                    setViewReady(false)
+                  }}
+                >
+                  关闭
+                </button>
+              </div>
+            </div>
+            <div className="relative overflow-hidden rounded-lg bg-black">
+              {(viewPreparing || (viewing.source_kind === 'video' && !viewReady)) && (
+                <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-black/50 text-xs text-white">
+                  {viewing.thumb_url && (
+                    <img
+                      src={viewing.thumb_url}
+                      alt=""
+                      className="absolute inset-0 h-full w-full object-contain opacity-40"
+                    />
+                  )}
+                  <span className="relative z-10 rounded bg-black/70 px-3 py-1.5">
+                    {viewPreparing ? '正在优化本地预览（仅首次）…' : '缓冲中…'}
+                  </span>
+                </div>
+              )}
+              {viewing.source_kind === 'video' ? (
+                viewMediaUrl ? (
+                  <video
+                    key={viewMediaUrl}
+                    src={viewMediaUrl}
+                    poster={viewing.thumb_url}
+                    controls
+                    autoPlay
+                    playsInline
+                    preload="auto"
+                    className="max-h-[70vh] w-full bg-black"
+                    onLoadedData={() => setViewReady(true)}
+                    onCanPlay={() => setViewReady(true)}
+                    onError={() => setViewReady(true)}
+                  />
+                ) : (
+                  <div className="flex h-[40vh] items-center justify-center">
+                    {viewing.thumb_url ? (
+                      <img src={viewing.thumb_url} alt="" className="max-h-full object-contain opacity-80" />
+                    ) : null}
+                  </div>
+                )
+              ) : (
+                <img
+                  src={viewMediaUrl || mediaOf(viewing)}
+                  alt={viewing.name}
+                  className="mx-auto max-h-[70vh] w-auto max-w-full object-contain"
+                  onLoad={() => setViewReady(true)}
+                />
+              )}
+            </div>
+            {compatible(viewing) && (
+              <button
+                type="button"
+                className="btn-primary mt-3 w-full rounded-lg py-2 text-sm"
+                onClick={() => {
+                  onSelect(viewing)
+                  setViewing(null)
+                }}
+              >
+                选用此形象
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       <AlertModal
         open={!!alert}
