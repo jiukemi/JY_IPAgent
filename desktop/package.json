@@ -49,7 +49,7 @@
           ]
         }
       ],
-      "artifactName": "九易AI智能体-Setup-${version}.${ext}"
+      "artifactName": "九易AI智能体-Setup-0.1.01.${ext}"
     },
     "nsis": {
       "oneClick": false,
