@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>JY_IPAgent · 用户手册</title>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a222c;
+      --text: #e8eef4;
+      --muted: #8b9aab;
+      --accent: #3d9cf0;
+      --ok: #3ecf8e;
+      --border: #2a3542;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #1a3a5c 0%, transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, #1e3d32 0%, transparent 50%),
+        var(--bg);
+      color: var(--text);
+    }
+    main { max-width: 760px; margin: 0 auto; padding: 40px 20px 72px; }
+    .topnav {
+      display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+      margin-bottom: 28px; font-size: 0.85rem;
+    }
+    .topnav a { color: var(--accent); text-decoration: none; }
+    .topnav a:hover { text-decoration: underline; }
+    .topnav .sep { color: var(--border); }
+    h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 8px; }
+    .tagline { color: var(--muted); margin: 0 0 28px; line-height: 1.6; font-size: 0.95rem; }
+    .tagline a { color: var(--accent); }
+    .toc {
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 20px;
+      margin-bottom: 20px;
+    }
+    .toc h2 { margin: 0 0 10px; font-size: 0.95rem; }
+    .toc ol {
+      margin: 0; padding-left: 1.25em; color: var(--muted);
+      font-size: 0.875rem; line-height: 1.7;
+    }
+    .toc a { color: var(--accent); text-decoration: none; }
+    .toc a:hover { text-decoration: underline; }
+    section.card {
+      background: color-mix(in srgb, var(--panel) 92%, transparent);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 20px 22px;
+      margin-bottom: 16px;
+    }
+    section.card > h2 {
+      margin: 0 0 12px; font-size: 1.05rem; scroll-margin-top: 24px;
+    }
+    section.card h3 {
+      margin: 18px 0 8px; font-size: 0.95rem; color: var(--text); scroll-margin-top: 24px;
+    }
+    section.card h3:first-of-type { margin-top: 4px; }
+    p, li { font-size: 0.9rem; color: var(--muted); line-height: 1.65; }
+    p { margin: 0 0 10px; }
+    p strong, li strong { color: var(--text); font-weight: 600; }
+    ol, ul { margin: 0 0 12px; padding-left: 1.25em; }
+    li { margin-bottom: 4px; }
+    a { color: var(--accent); }
+    code {
+      font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+      font-size: 0.84em;
+      background: rgba(0, 0, 0, 0.28);
+      padding: 1px 6px;
+      border-radius: 5px;
+      color: #c8d6e5;
+    }
+    table.specs {
+      width: 100%; border-collapse: collapse; font-size: 0.8rem; margin: 8px 0 12px;
+    }
+    table.specs th, table.specs td {
+      text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border);
+      vertical-align: top; line-height: 1.45;
+    }
+    table.specs thead th {
+      color: var(--muted); font-weight: 600; font-size: 0.72rem;
+    }
+    table.specs tbody th { color: var(--muted); font-weight: 600; width: 18%; }
+    table.specs td:nth-child(2) { color: var(--muted); }
+    table.specs td:nth-child(3) { color: var(--text); }
+    .faq-q {
+      margin: 14px 0 4px; font-size: 0.9rem; font-weight: 600; color: var(--text);
+    }
+    .faq-q:first-child { margin-top: 0; }
+    footer {
+      margin-top: 28px; font-size: 0.75rem; color: var(--muted);
+      display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+    }
+    footer a { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <nav class="topnav" aria-label="页面导航">
+      <a href="./download.html">← 返回下载页</a>
+      <span class="sep">·</span>
+      <a href="../README.md">开发者 README</a>
+    </nav>
+
+    <h1>JY_IPAgent 用户手册</h1>
+    <p class="tagline">
+      面向最终用户与首次部署者。开发者快速上手见仓库根目录
+      <a href="../README.md">README.md</a>。
+    </p>
+
+    <nav class="toc" aria-label="目录">
+      <h2>目录</h2>
+      <ol>
+        <li><a href="#s1">你能用它做什么</a></li>
+        <li><a href="#s2">最低与推荐配置</a></li>
+        <li><a href="#s3">安装包用户</a></li>
+        <li><a href="#s4">源码用户</a></li>
+        <li><a href="#s5">引擎怎么选</a></li>
+        <li><a href="#s6">常见问题</a></li>
+        <li><a href="#s7">合规与免责</a></li>
+        <li><a href="#s8">反馈</a></li>
+      </ol>
+    </nav>
+
+    <section class="card" id="s1">
+      <h2>1. 你能用它做什么</h2>
+      <p>按流水线制作本地教育口播视频：</p>
+      <ol>
+        <li><strong>文案</strong>：导入/转写/改写口播稿</li>
+        <li><strong>配音</strong>：克隆或预设音色生成语音</li>
+        <li><strong>口播画面</strong>：数字人（推荐 HeyGem）或实拍对口型</li>
+        <li><strong>发布</strong>：加字幕、封面、BGM 等，导出成片</li>
+      </ol>
+      <p>
+        默认数字人后端为 <strong>HeyGem</strong>。仅有一张静图时可试
+        <strong>SadTalker</strong>（效果通常弱于 HeyGem）。
+      </p>
+    </section>
+
+    <section class="card" id="s2">
+      <h2>2. 最低与推荐配置</h2>
+      <p>装机前先对照下表。应用内「设置 → 本机环境」也会按显存提示能否跑各引擎。</p>
+      <table class="specs">
+        <thead>
+          <tr>
+            <th>项目</th>
+            <th>最低（能试用）</th>
+            <th>推荐（完整本地口播）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>系统</th>
+            <td>Windows 10 / 11（64 位）</td>
+            <td>同左</td>
+          </tr>
+          <tr>
+            <th>CPU</th>
+            <td>近两年主流四核及以上</td>
+            <td>同左或更好</td>
+          </tr>
+          <tr>
+            <th>内存</th>
+            <td>16 GB</td>
+            <td>16–32 GB</td>
+          </tr>
+          <tr>
+            <th>显卡</th>
+            <td><strong>NVIDIA 独显</strong>，约 <strong>6 GB</strong> 显存</td>
+            <td><strong>8 GB+</strong> 显存（如 RTX 3060 / 4060 同级及以上）</td>
+          </tr>
+          <tr>
+            <th>磁盘</th>
+            <td>预留约 <strong>40 GB+</strong></td>
+            <td><strong>80 GB+</strong>（模型 + Docker 镜像）</td>
+          </tr>
+          <tr>
+            <th>其它</th>
+            <td>
+              能安装
+              <a href="https://www.docker.com/products/docker-desktop/" target="_blank" rel="noopener noreferrer">Docker Desktop</a>
+              （口播主路径）
+            </td>
+            <td>同左；Hub 拉不动时用夸克加速包</td>
+          </tr>
+        </tbody>
+      </table>
+      <p><strong>补充说明：</strong></p>
+      <ul>
+        <li><strong>口播（HeyGem）</strong>：建议显存 ≥ <strong>6 GB</strong>；低于此值软件会提示，可能无法稳定生成。</li>
+        <li><strong>本地高品质配音（如 IndexTTS）</strong>：常需约 <strong>6–8 GB+</strong> 显存；机子偏弱可改用 Piper（CPU）或云端配音。</li>
+        <li><strong>RTX 50 系</strong>（5060 / 5070 / 5080 / 5090 等）：口播须用夸克包里的 <strong>「RTX50」</strong> 镜像，勿下「通用显卡」包。</li>
+        <li><strong>无 NVIDIA 独显</strong>：仍可做文案、部分轻量配音/转写；<strong>不要指望</strong>本地数字人口播效果。</li>
+        <li>当前标准安装包（Mini）<strong>不含</strong>大镜像，需 Docker + 在线拉取或夸克离线包；「免 Docker 完整包」若发布会单独标明。</li>
+      </ul>
+    </section>
+
+    <section class="card" id="s3">
+      <h2>3. 安装包用户</h2>
+
+      <h3 id="s3-1">3.1 安装与首次启动</h3>
+      <ol>
+        <li>运行安装程序（如 <code>九易AI智能体-Setup-*.exe</code> / 仓库发布页提供的 Setup）</li>
+        <li>打开应用</li>
+        <li>首次启动可能自动准备 <strong>Python / FFmpeg</strong>（需联网，等待数分钟）</li>
+        <li>打开 <strong>设置 → 本机环境 · GPU 与模型</strong>，按需安装配音、转写等组件</li>
+      </ol>
+      <p>
+        Release / 源码下载页（自动选择 GitHub 或 Gitee）：打开仓库中的
+        <a href="./download.html">download.html</a>。
+      </p>
+
+      <h3 id="s3-2">3.2 口播引擎（HeyGem）</h3>
+      <ol>
+        <li>打开应用内 <strong>口播引擎安装向导</strong>（形象页或 <strong>设置 → 口播引擎安装向导</strong>）</li>
+        <li>按向导：检测显卡 → 安装/启动 Docker Desktop（通常需管理员，装完可能重启）→ 下载对应夸克加速包 → 扫描/拖入安装 → 加载镜像并启动</li>
+        <li>也可在 <strong>设置 → 网盘加速 · 夸克</strong> 单独下载与安装；口播分 <strong>通用显卡 / RTX50</strong> 两包，只下本机推荐的那一个</li>
+        <li>有外网且 Docker 能 pull 时，也可跳过夸克，由程序按显卡拉取镜像；<strong>第一次约十几 GB</strong>，成功一次即可</li>
+      </ol>
+      <p>软件安装包本身不含大镜像，体积保持较小。当前推荐路径仍是 <strong>Docker + 镜像</strong>（在线或夸克离线）。</p>
+
+      <h3 id="s3-3">3.3 推荐操作顺序</h3>
+      <ol>
+        <li>完成文案</li>
+        <li>完成配音并确认听感</li>
+        <li>注册/选择数字人形象（HeyGem 需参考视频；SadTalker 需肖像图）</li>
+        <li>生成口播视频</li>
+        <li>到发布页加字幕/封面后导出</li>
+      </ol>
+    </section>
+
+    <section class="card" id="s4">
+      <h2>4. 源码用户</h2>
+      <p>见根目录 README「快速开始」。要点：</p>
+      <ul>
+        <li>复制 <code>config.example.yaml</code> → <code>config.yaml</code>（也可由程序首次启动自动生成）</li>
+        <li><code>pip install -r requirements.txt</code></li>
+        <li>构建 <code>web/</code> 后执行 <code>start.bat</code> 或 <code>py -3.11 server.py</code></li>
+        <li>引擎用 <code>scripts/setup/setup_*.ps1</code> 或应用内安装</li>
+      </ul>
+    </section>
+
+    <section class="card" id="s5">
+      <h2>5. 引擎怎么选</h2>
+      <table class="specs">
+        <thead>
+          <tr>
+            <th>用途</th>
+            <th>推荐</th>
+            <th>备注</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>数字人口播</th>
+            <td>HeyGem</td>
+            <td>需 Docker；参考视频驱动，动作较自然</td>
+          </tr>
+          <tr>
+            <th>仅有静图</th>
+            <td>SadTalker</td>
+            <td>备选，上限较低</td>
+          </tr>
+          <tr>
+            <th>实拍换嘴精修</th>
+            <td>LatentSync</td>
+            <td>慢、吃资源</td>
+          </tr>
+          <tr>
+            <th>本地配音</th>
+            <td>IndexTTS</td>
+            <td>中英混读与克隆较稳</td>
+          </tr>
+          <tr>
+            <th>轻量/在线配音</th>
+            <td>Piper / Edge</td>
+            <td>能力有限或需联网</td>
+          </tr>
+          <tr>
+            <th>转写</th>
+            <td>FunASR（中文）/ Whisper</td>
+            <td>按机器与语言选择</td>
+          </tr>
+        </tbody>
+      </table>
+      <p>未安装的引擎请先在设置页或对应 <code>scripts/setup/setup_*.ps1</code> 装好，再在页面切换。</p>
+    </section>
+
+    <section class="card" id="s6">
+      <h2>6. 常见问题</h2>
+      <p class="faq-q">端口被占用</p>
+      <p>默认尝试 <code>7860</code>，被占用时会自动换邻近端口。看启动窗口提示的实际地址。</p>
+
+      <p class="faq-q">首次很慢 / 一直在下载</p>
+      <p>
+        Python、FFmpeg、模型、Docker 镜像都可能很大。保持联网；可改用国内镜像（如
+        <code>config.yaml</code> 中的 <code>hf_endpoint</code>）。无外网时用设置里的夸克加速包。
+      </p>
+
+      <p class="faq-q">口播页提示引擎未就绪</p>
+      <p>打开 <strong>口播引擎安装向导</strong>：确认 Docker 正在运行、已安装对应加速包并完成 load；或重新一键启动。</p>
+
+      <p class="faq-q">没有 NVIDIA 显卡 / 显存不够</p>
+      <p>
+        部分 TTS/转写仍可能可用；HeyGem 与多数本地大模型会明显受限。请对照上文「最低与推荐配置」，或改用云端/轻量引擎。
+      </p>
+
+      <p class="faq-q">静图效果差</p>
+      <p>优先改用 HeyGem + 参考视频；SadTalker 仅作应急。</p>
+
+      <p class="faq-q">配置改了不生效</p>
+      <p>确认改的是运行目录下的 <code>config.yaml</code>，并重启服务。</p>
+    </section>
+
+    <section class="card" id="s7">
+      <h2>7. 合规与免责</h2>
+      <ul>
+        <li>本软件按 <strong>PolyForm Noncommercial</strong> 授权：<strong>禁止商用</strong>；二次开发与分发须保留署名与协议，详见根目录 <code>LICENSE</code> 与 README。</li>
+        <li>口播素材涉及肖像、声音、版权时，请自行取得授权。</li>
+        <li>
+          第三方引擎与云端 API 清单见
+          <a href="./THIRD_PARTY_NOTICES.md">docs/THIRD_PARTY_NOTICES.md</a>；应用内：
+          <strong>设置 → 关于我们 → 第三方组件与模型</strong>。
+        </li>
+        <li>第三方模型与 Docker 镜像条款独立适用，本项目不承担其合规责任。</li>
+        <li>软件按「现状」提供，作者不对使用结果作保证。</li>
+      </ul>
+    </section>
+
+    <section class="card" id="s8">
+      <h2>8. 反馈</h2>
+      <p>
+        使用中遇到崩溃、安装失败或功能建议，请到源仓库 <strong>JY_IPAgent</strong> 提 Issue，
+        或打开抖音搜索 <strong>「九易」</strong> 进群反馈，并尽量附上：系统版本、GPU、是否已装 Docker、相关日志片段。
+        反馈将用于后续版本更新。
+      </p>
+      <p>
+        <a href="./download.html">返回下载页</a>
+        ·
+        <a href="https://www.douyin.com/search/%E4%B9%9D%E6%98%93" target="_blank" rel="noopener noreferrer">抖音搜索「九易」</a>
+      </p>
+    </section>
+
+    <footer>
+      <span>PolyForm Noncommercial · 禁止商用</span>
+      <a href="./download.html">下载页</a>
+      <a href="./用户手册.md">Markdown 源稿</a>
+    </footer>
+  </main>
+</body>
+</html>
