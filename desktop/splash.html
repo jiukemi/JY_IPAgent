@@ -338,6 +338,27 @@
         padding: 9px 11px;
       }
       .prep-free.show { display: block; }
+      .help-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        -webkit-app-region: no-drag;
+      }
+      .help-bar.hidden { display: none; }
+      .help-bar button { flex: 1 1 140px; min-width: 120px; }
+      .stall-tip {
+        display: none;
+        font-size: 11.5px;
+        line-height: 1.5;
+        color: #fde68a;
+        border: 1px solid rgba(234, 179, 8, 0.35);
+        background: rgba(234, 179, 8, 0.1);
+        border-radius: 10px;
+        padding: 9px 11px;
+        -webkit-app-region: no-drag;
+        user-select: text;
+      }
+      .stall-tip.show { display: block; }
     </style>
   </head>
   <body>
@@ -366,6 +387,16 @@
           </div>
         </div>
         <div id="log"></div>
+      </div>
+
+      <div class="stall-tip" id="stallTip">
+        准备时间较长时属正常（首次需下载运行环境）。若下方日志长时间无新内容，可点「清除运行时并重试」，或「打开日志」查看详情。
+      </div>
+
+      <div class="help-bar" id="helpBar">
+        <button class="primary" id="btnClearLive">清除运行时并重试</button>
+        <button id="btnLogLive">打开日志</button>
+        <button id="btnQuitLive">退出</button>
       </div>
 
       <div class="success-box" id="successBox">
@@ -414,6 +445,9 @@
       const runtimeMeta = document.getElementById('runtimeMeta')
       const runtimePath = document.getElementById('runtimePath')
       const btnClear = document.getElementById('btnClear')
+      const btnClearLive = document.getElementById('btnClearLive')
+      const helpBar = document.getElementById('helpBar')
+      const stallTip = document.getElementById('stallTip')
       const successBox = document.getElementById('successBox')
       const successFree = document.getElementById('successFree')
       const successGuide = document.getElementById('successGuide')
@@ -431,19 +465,22 @@
       let errPayload = ''
       let clearing = false
       let lastLine = ''
+      let lastLogAt = Date.now()
       let tickerIdx = 0
       const tips = [
-        '优先复用本机 Python / FFmpeg，缺失项才会下载',
-        '首次准备可能需要几分钟，请保持联网',
+        '下方按钮可随时「清除运行时并重试」或打开日志',
+        '首次准备常需几分钟：请看进度条下方实时日志',
+        '若十几分钟日志完全不动，多半是网络或杀毒拦截',
         '杀毒软件拦截时请放行本程序与 Python',
-        '失败时可一键清除运行时后自动重试',
-        '浏览器登录需要 Playwright Chromium',
+        '完整日志目录可用「打开日志」按钮查看 bootstrap.log',
       ]
 
       function showSuccess(data) {
         succeeded = true
         failed = false
         progressCard.style.display = 'none'
+        helpBar.classList.add('hidden')
+        stallTip.classList.remove('show')
         prepFree.classList.remove('show')
         runtimeBox.classList.remove('show')
         errorBox.classList.remove('show')
@@ -515,6 +552,8 @@
         const t = String(line).replace(/\r/g, '')
         if (!t.trim()) return
         lastLine = t.trim().replace(/^==>\s*/, '').slice(0, 120)
+        lastLogAt = Date.now()
+        stallTip.classList.remove('show')
         logEl.textContent += (logEl.textContent ? '\n' : '') + t.trimEnd()
         logEl.scrollTop = logEl.scrollHeight
         // Live logs nudge the soft-crawl ceiling so the bar isn't stuck at 5%
@@ -544,6 +583,52 @@
         setMarquee(tips[tickerIdx])
       }, 4500)
 
+      // After ~90s without new log lines, highlight retry tip (button already visible)
+      setInterval(() => {
+        if (failed || succeeded || clearing) return
+        if (Date.now() - lastLogAt >= 90000) {
+          stallTip.classList.add('show')
+          subtitle.textContent = '准备较慢 — 可点下方「清除运行时并重试」'
+        }
+      }, 5000)
+
+      async function doClearAndRetry(btn) {
+        if (clearing) return
+        clearing = true
+        const buttons = [btnClear, btnClearLive].filter(Boolean)
+        buttons.forEach((b) => {
+          b.disabled = true
+          b.textContent = '正在清除…'
+        })
+        subtitle.textContent = '正在清除运行时并重启…'
+        setMarquee('正在清除运行时…')
+        stallTip.classList.add('show')
+        try {
+          const res = await window.bootSplash.clearAndRetry()
+          if (!res?.ok) {
+            errText.textContent = (errPayload ? errPayload + '\n\n' : '') + (res?.message || '清除失败')
+            errorBox.classList.add('show')
+            buttons.forEach((b) => {
+              b.disabled = false
+              b.textContent = '清除运行时并重试'
+            })
+            clearing = false
+            return
+          }
+          buttons.forEach((b) => {
+            b.textContent = '已清除，正在重启…'
+          })
+        } catch (e) {
+          errText.textContent = String(e)
+          errorBox.classList.add('show')
+          buttons.forEach((b) => {
+            b.disabled = false
+            b.textContent = '清除运行时并重试'
+          })
+          clearing = false
+        }
+      }
+
       window.bootSplash?.onUpdate((data) => {
         if (!data) return
         if (data.runtime) renderRuntime(data.runtime)
@@ -567,13 +652,19 @@
           if (typeof data.pct === 'number') paintPct(Math.max(displayPct, data.pct))
         }
         if (data.line) appendLog(data.line)
+        if (data.stallHint) {
+          stallTip.classList.add('show')
+          if (data.stallHintText) stallTip.textContent = data.stallHintText
+        }
         if (data.error) {
           failed = true
           errPayload = data.error
           errText.textContent = data.error
           errorBox.classList.add('show')
+          helpBar.classList.remove('hidden')
+          stallTip.classList.add('show')
           successBox.classList.remove('show')
-          subtitle.textContent = '启动失败 — 可一键清除运行时重试'
+          subtitle.textContent = '启动失败 — 请点「清除运行时并重试」'
           progressCard.style.maxHeight = '120px'
           barEl.classList.remove('indeterminate')
           barEl.classList.add('stopped')
@@ -627,30 +718,10 @@
       }
       document.getElementById('btnLog').onclick = () => window.bootSplash?.openLogDir()
       document.getElementById('btnQuit').onclick = () => window.bootSplash?.quit()
-      btnClear.onclick = async () => {
-        if (clearing) return
-        clearing = true
-        btnClear.disabled = true
-        btnClear.textContent = '正在清除…'
-        subtitle.textContent = '正在清除运行时并重启…'
-        setMarquee('正在清除运行时…')
-        try {
-          const res = await window.bootSplash.clearAndRetry()
-          if (!res?.ok) {
-            errText.textContent = (errPayload ? errPayload + '\n\n' : '') + (res?.message || '清除失败')
-            btnClear.disabled = false
-            btnClear.textContent = '清除运行时并重试'
-            clearing = false
-            return
-          }
-          btnClear.textContent = '已清除，正在重启…'
-        } catch (e) {
-          errText.textContent = String(e)
-          btnClear.disabled = false
-          btnClear.textContent = '清除运行时并重试'
-          clearing = false
-        }
-      }
+      document.getElementById('btnLogLive').onclick = () => window.bootSplash?.openLogDir()
+      document.getElementById('btnQuitLive').onclick = () => window.bootSplash?.quit()
+      btnClear.onclick = () => doClearAndRetry(btnClear)
+      btnClearLive.onclick = () => doClearAndRetry(btnClearLive)
 
       setMarquee(tips[0])
       window.bootSplash?.runtimeInfo?.().then(renderRuntime).catch(() => {})

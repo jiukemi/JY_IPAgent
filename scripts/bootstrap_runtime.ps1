@@ -76,16 +76,75 @@ if (-not (Test-Path $RuntimeCfg)) {
   }
 }
 
-function Get-File([string[]]$Urls, [string]$Out) {
+function Get-File {
+  param(
+    [string[]]$Urls,
+    [string]$Out,
+    [int]$ProgressBase = 20,
+    [int]$ProgressSpan = 14,
+    [string]$Label = "Downloading"
+  )
   $last = $null
   foreach ($Url in $Urls) {
+    $tmp = "$Out.partial"
     try {
       Write-Log "==> download $Url"
-      Invoke-WebRequest -Uri $Url -OutFile $Out -UseBasicParsing -TimeoutSec 600
-      if ((Test-Path $Out) -and ((Get-Item $Out).Length -gt 1000)) { return }
+      Write-ProgressLine $ProgressBase ("{0}…" -f $Label)
+      Remove-Item $tmp, $Out -Force -ErrorAction SilentlyContinue
+
+      $req = [System.Net.HttpWebRequest]::Create($Url)
+      $req.Method = "GET"
+      $req.Timeout = 120000
+      $req.ReadWriteTimeout = 120000
+      $req.UserAgent = "JY_IPAgent-bootstrap/1.0"
+      $resp = $req.GetResponse()
+      try {
+        $total = [int64]$resp.ContentLength
+        $src = $resp.GetResponseStream()
+        $fs = [System.IO.File]::Create($tmp)
+        try {
+          $buf = New-Object byte[] 65536
+          $read = [int64]0
+          $lastPct = -1
+          $lastBeat = Get-Date
+          while (($n = $src.Read($buf, 0, $buf.Length)) -gt 0) {
+            $fs.Write($buf, 0, $n)
+            $read += $n
+            $now = Get-Date
+            $force = (($now - $lastBeat).TotalSeconds -ge 2)
+            if ($total -gt 0) {
+              $done = [int]([math]::Min(100, ($read * 100.0) / $total))
+              if ($force -or ($done -ne $lastPct -and ($done % 5 -eq 0))) {
+                $mapped = $ProgressBase + [int](($ProgressSpan * $done) / 100)
+                Write-ProgressLine $mapped ("{0} {1}% ({2:N1}/{3:N1} MB)" -f $Label, $done, ($read / 1MB), ($total / 1MB))
+                Write-Log ("==> download {0}% {1:N1}/{2:N1} MB" -f $done, ($read / 1MB), ($total / 1MB))
+                $lastPct = $done
+                $lastBeat = $now
+              }
+            } elseif ($force) {
+              Write-ProgressLine $ProgressBase ("{0} ({1:N1} MB…)" -f $Label, ($read / 1MB))
+              Write-Log ("==> download received {0:N1} MB…" -f ($read / 1MB))
+              $lastBeat = $now
+            }
+          }
+        } finally {
+          $fs.Close()
+          $src.Close()
+        }
+      } finally {
+        $resp.Close()
+      }
+
+      if ((Test-Path $tmp) -and ((Get-Item $tmp).Length -gt 1000)) {
+        Move-Item -Force $tmp $Out
+        Write-Log ("==> download ok {0:N1} MB -> $Out" -f ((Get-Item $Out).Length / 1MB))
+        return
+      }
+      throw "downloaded file too small"
     } catch {
       $last = $_.Exception.Message
       Write-Log "!! download failed: $last"
+      Remove-Item $tmp -Force -ErrorAction SilentlyContinue
     }
   }
   throw "download failed after mirrors: $last"
@@ -185,9 +244,17 @@ function Test-SystemPython {
 import sys
 raise SystemExit(0 if sys.version_info[:2] >= (3, 10) else 1)
 '@ | Set-Content -Path $probePy -Encoding ASCII
+  $i = 0
   foreach ($c in $candidates) {
+    $i++
+    $hint = if ($c.PrefArgs.Count) { "$($c.Exe) $($c.PrefArgs -join ' ')" } else { $c.Exe }
+    Write-ProgressLine (8 + [math]::Min(6, $i)) ("Probe system Python: $hint")
+    Write-Log "==> probe $hint"
     $cmd = Get-Command $c.Exe -ErrorAction SilentlyContinue
-    if (-not $cmd) { continue }
+    if (-not $cmd) {
+      Write-Log "==> not found: $($c.Exe)"
+      continue
+    }
     $exePath = $cmd.Source
     $argParts = @()
     $argParts += $c.PrefArgs
@@ -210,11 +277,13 @@ raise SystemExit(0 if sys.version_info[:2] >= (3, 10) else 1)
         Remove-Item $probePy -Force -ErrorAction SilentlyContinue
         return @{ Exe = $exePath; PrefArgs = $c.PrefArgs }
       }
+      Write-Log "==> probe exit=$($p.ExitCode): $hint"
     } catch {
       Write-Log "!! probe failed $($c.Exe): $($_.Exception.Message)"
     }
   }
   Remove-Item $probePy -Force -ErrorAction SilentlyContinue
+  Write-Log "==> no suitable system Python, will use portable embed"
   return $null
 }
 
@@ -253,11 +322,12 @@ function Ensure-EmbedPython {
   $ver = "3.11.9"
   $zipName = "python-$ver-embed-amd64.zip"
   $zipPath = Join-Path $RuntimeRoot $zipName
-  Get-File @(
+  Get-File -Urls @(
     "https://registry.npmmirror.com/-/binary/python/$ver/$zipName",
     "https://mirrors.huaweicloud.com/python/$ver/$zipName",
     "https://www.python.org/ftp/python/$ver/$zipName"
-  ) $zipPath
+  ) -Out $zipPath -ProgressBase 25 -ProgressSpan 12 -Label "Download portable Python"
+  Write-ProgressLine 38 "Extract portable Python"
   if (Test-Path $EmbedDir) { Remove-Item -Recurse -Force $EmbedDir }
   New-Item -ItemType Directory -Force -Path $EmbedDir | Out-Null
   Expand-Archive -Path $zipPath -DestinationPath $EmbedDir -Force
@@ -276,11 +346,12 @@ function Ensure-EmbedPython {
   }
 
   $getPip = Join-Path $RuntimeRoot "get-pip.py"
-  Get-File @(
+  Get-File -Urls @(
     "https://mirrors.aliyun.com/pypi/get-pip.py",
     "https://bootstrap.pypa.io/get-pip.py"
-  ) $getPip
-  $code = Invoke-PyExe -Exe $EmbedPy -Args @($getPip, "-i", $PipMirror, "--trusted-host", $PipHost)
+  ) -Out $getPip -ProgressBase 40 -ProgressSpan 4 -Label "Download get-pip"
+  Write-ProgressLine 45 "Install pip into portable Python"
+  $code = Invoke-PyExe -Exe $EmbedPy -Args @($getPip, "-i", $PipMirror, "--trusted-host", $PipHost) -HeartbeatPct 45 -HeartbeatLabel "Installing pip"
   if ($code -ne 0) { throw "get-pip failed exit=$code" }
   Remove-Item $getPip -Force -ErrorAction SilentlyContinue
 }
@@ -315,11 +386,11 @@ $code = Invoke-PyExe -Exe $PyExe -Args @("-m", "pip", "--version")
 if ($code -ne 0) {
   Write-ProgressLine 45 "Install pip"
   $getPip = Join-Path $RuntimeRoot "get-pip.py"
-  Get-File @(
+  Get-File -Urls @(
     "https://mirrors.aliyun.com/pypi/get-pip.py",
     "https://bootstrap.pypa.io/get-pip.py"
-  ) $getPip
-  $code = Invoke-PyExe -Exe $PyExe -Args @($getPip, "-i", $PipMirror, "--trusted-host", $PipHost)
+  ) -Out $getPip -ProgressBase 42 -ProgressSpan 3 -Label "Download get-pip"
+  $code = Invoke-PyExe -Exe $PyExe -Args @($getPip, "-i", $PipMirror, "--trusted-host", $PipHost) -HeartbeatPct 45 -HeartbeatLabel "Installing pip"
   if ($code -ne 0) { throw "get-pip failed exit=$code" }
   Remove-Item $getPip -Force -ErrorAction SilentlyContinue
 }
@@ -409,7 +480,7 @@ from workflow.runtime_bootstrap import ensure_ffmpeg
 import json
 print(json.dumps(ensure_ffmpeg(True), ensure_ascii=False))
 '@ | Set-Content -Path $probeFf -Encoding ASCII
-  $code = Invoke-PyExe -Exe $PyExe -Args @($probeFf)
+  $code = Invoke-PyExe -Exe $PyExe -Args @($probeFf) -HeartbeatPct 90 -HeartbeatLabel "Download FFmpeg"
   Remove-Item $probeFf -Force -ErrorAction SilentlyContinue
   if ($code -ne 0) { Write-Log "!! FFmpeg download failed (non-fatal)" }
 }

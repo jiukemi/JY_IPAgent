@@ -94,13 +94,13 @@
   <main>
     <h1>JY_IPAgent</h1>
     <p class="tagline">
-      本地教育口播智能体 · Release <strong id="ver">0.1.02</strong><br />
-      下面两个按钮分别下载 Gitee / GitHub 上的 <strong>Release 安装包</strong>。页面会探测网络并标出推荐线路，需你自己点击下载。
+      本地教育口播智能体 · Release <strong id="ver">读取中…</strong><br />
+      下面两个按钮分别下载 Gitee / GitHub 上的 <strong>最新 Release 安装包</strong>（页面自动读取两边最新版）。探测网络后会标出推荐线路，需你自己点击下载。
     </p>
 
     <section class="card">
       <h2>Release 安装包</h2>
-      <p class="status" id="probeStatus">正在探测 GitHub / Gitee…</p>
+      <p class="status" id="probeStatus">正在读取最新版本并探测线路…</p>
       <div class="actions">
         <button type="button" class="btn btn-gitee" id="btnGitee" disabled>
           下载 Gitee 安装包<span class="badge" id="badgeGitee" hidden>推荐</span>
@@ -110,8 +110,9 @@
         </button>
       </div>
       <p class="meta">
-        文件：<code id="fileName">九易AI智能体-Setup-0.1.02.exe</code><br />
-        两个镜像为同一安装包，任选一个即可。<br />        口播大镜像请用应用内夸克加速包，不在本安装包内。
+        文件：<code id="fileName">读取中…</code><br />
+        两个镜像为同一安装包，任选一个即可。<br />
+        口播大镜像请用应用内夸克加速包，不在本安装包内。
       </p>
     </section>
 
@@ -202,29 +203,33 @@
 
     <footer>
       PolyForm Noncommercial · 禁止商用 ·
-      <a href="./yhsc.html">用户手册</a>
+      <a href="./用户手册.html">用户手册</a>
     </footer>
   </main>
 
   <script>
     (function () {
-      const VERSION = "0.1.02";
-      // Same installer; filenames differ because GitHub upload mangles CJK names on this host.
-      const SETUP_GITEE = "九易AI智能体-Setup-" + VERSION + ".exe";
-      const SETUP_GITHUB = "JY_IPAgent-Setup-" + VERSION + ".exe";
-
-      const MIRRORS = {
+      const REPOS = {
         gitee: {
+          id: "gitee",
           label: "Gitee",
+          api: "https://gitee.com/api/v5/repos/webhwh/JY_IPAgent-/releases/latest",
           probe: "https://gitee.com/favicon.ico",
-          setup: "https://gitee.com/webhwh/JY_IPAgent-/releases/download/v" + VERSION + "/" + encodeURIComponent(SETUP_GITEE),
-          fileName: SETUP_GITEE,
+          releasesPage: "https://gitee.com/webhwh/JY_IPAgent-/releases",
+          // Prefer CJK installer name; fall back to any Setup-*.exe
+          pickAsset: function (assets) {
+            return pickExe(assets, [/Setup-.*\.exe$/i, /\.exe$/i], /JY_IPAgent/i);
+          },
         },
         github: {
+          id: "github",
           label: "GitHub",
+          api: "https://api.github.com/repos/jiukemi/JY_IPAgent/releases/latest",
           probe: "https://github.com/favicon.ico",
-          setup: "https://github.com/jiukemi/JY_IPAgent/releases/download/v" + VERSION + "/" + encodeURIComponent(SETUP_GITHUB),
-          fileName: SETUP_GITHUB,
+          releasesPage: "https://github.com/jiukemi/JY_IPAgent/releases",
+          pickAsset: function (assets) {
+            return pickExe(assets, [/JY_IPAgent-Setup-.*\.exe$/i, /Setup-.*\.exe$/i, /\.exe$/i], null);
+          },
         },
       };
 
@@ -233,9 +238,54 @@
       const btnGithub = document.getElementById("btnGithub");
       const badgeGitee = document.getElementById("badgeGitee");
       const badgeGithub = document.getElementById("badgeGithub");
-      document.getElementById("ver").textContent = VERSION;
-      document.getElementById("fileName").textContent =
-        "Gitee：" + SETUP_GITEE + " · GitHub：" + SETUP_GITHUB;
+      const verEl = document.getElementById("ver");
+      const fileEl = document.getElementById("fileName");
+
+      const state = {
+        gitee: { ok: false, version: "", fileName: "", setup: "", reachable: false },
+        github: { ok: false, version: "", fileName: "", setup: "", reachable: false },
+      };
+
+      function pickExe(assets, patterns, exclude) {
+        const list = Array.isArray(assets) ? assets : [];
+        for (let i = 0; i < patterns.length; i++) {
+          const re = patterns[i];
+          for (let j = 0; j < list.length; j++) {
+            const a = list[j];
+            const name = a && a.name ? String(a.name) : "";
+            const url = a && a.browser_download_url ? String(a.browser_download_url) : "";
+            if (!url || !/\.exe$/i.test(name) && !/\.exe(\?|$)/i.test(url)) continue;
+            if (exclude && (exclude.test(name) || exclude.test(url))) continue;
+            if (re.test(name) || re.test(url)) {
+              return { name: name || decodeURIComponent(url.split("/").pop() || "setup.exe"), url: url };
+            }
+          }
+        }
+        return null;
+      }
+
+      function stripV(tag) {
+        return String(tag || "").replace(/^v/i, "");
+      }
+
+      function parseVer(tag) {
+        const s = stripV(tag);
+        const m = s.match(/^(\d+)\.(\d+)\.(\d+)/);
+        if (!m) return null;
+        return [Number(m[1]), Number(m[2]), Number(m[3]), s];
+      }
+
+      function cmpVer(a, b) {
+        const pa = parseVer(a);
+        const pb = parseVer(b);
+        if (!pa && !pb) return 0;
+        if (!pa) return -1;
+        if (!pb) return 1;
+        for (let i = 0; i < 3; i++) {
+          if (pa[i] !== pb[i]) return pa[i] - pb[i];
+        }
+        return 0;
+      }
 
       function preferGiteeByLocale() {
         const lang = (navigator.languages && navigator.languages[0]) || navigator.language || "";
@@ -247,7 +297,8 @@
         const a = document.createElement("a");
         a.href = url;
         a.rel = "noopener";
-        a.setAttribute("download", fileName);
+        a.target = "_blank";
+        if (fileName) a.setAttribute("download", fileName);
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -261,32 +312,95 @@
           .catch(function () { clearTimeout(t); return false; });
       }
 
-      btnGitee.addEventListener("click", function () {
-        startDownload(MIRRORS.gitee.setup, MIRRORS.gitee.fileName);
-      });
-      btnGithub.addEventListener("click", function () {
-        startDownload(MIRRORS.github.setup, MIRRORS.github.fileName);
-      });
+      function fetchLatest(repo) {
+        return fetch(repo.api, {
+          method: "GET",
+          headers: { Accept: "application/json" },
+          cache: "no-store",
+        })
+          .then(function (resp) {
+            if (!resp.ok) throw new Error("HTTP " + resp.status);
+            return resp.json();
+          })
+          .then(function (data) {
+            const tag = data.tag_name || data.name || "";
+            const version = stripV(tag);
+            const asset = repo.pickAsset(data.assets || []);
+            if (!asset || !version) throw new Error("no setup asset");
+            return {
+              id: repo.id,
+              ok: true,
+              version: version,
+              tag: tag,
+              fileName: asset.name,
+              setup: asset.url,
+            };
+          })
+          .catch(function () {
+            return { id: repo.id, ok: false, version: "", fileName: "", setup: repo.releasesPage };
+          });
+      }
 
-      Promise.all([
-        probe(MIRRORS.github.probe, 2500).then(function (ok) { return { id: "github", ok: ok }; }),
-        probe(MIRRORS.gitee.probe, 2500).then(function (ok) { return { id: "gitee", ok: ok }; }),
-      ]).then(function (results) {
-        const map = {};
-        results.forEach(function (r) { map[r.id] = r.ok; });
+      function wireButton(btn, info, fallbackPage) {
+        btn.onclick = function () {
+          if (info.ok && info.setup) startDownload(info.setup, info.fileName);
+          else window.open(fallbackPage, "_blank", "noopener");
+        };
+        btn.disabled = false;
+      }
+
+      function render() {
+        const g = state.gitee;
+        const h = state.github;
+        let displayVer = "—";
+        if (g.ok && h.ok) {
+          displayVer = cmpVer(g.version, h.version) >= 0 ? g.version : h.version;
+          if (g.version !== h.version) {
+            displayVer = "Gitee " + g.version + " / GitHub " + h.version;
+          }
+        } else if (g.ok) displayVer = g.version;
+        else if (h.ok) displayVer = h.version;
+        verEl.textContent = displayVer;
+
         const parts = [];
-        parts.push("GitHub：" + (map.github ? '<span class="ok">可达</span>' : '<span class="warn">较慢/不可达</span>'));
-        parts.push("Gitee：" + (map.gitee ? '<span class="ok">可达</span>' : '<span class="warn">较慢/不可达</span>'));
+        if (g.ok) parts.push("Gitee：" + g.fileName);
+        else parts.push("Gitee：读取失败（将打开 Release 页）");
+        if (h.ok) parts.push("GitHub：" + h.fileName);
+        else parts.push("GitHub：读取失败（将打开 Release 页）");
+        fileEl.textContent = parts.join(" · ");
+
+        wireButton(btnGitee, g, REPOS.gitee.releasesPage);
+        wireButton(btnGithub, h, REPOS.github.releasesPage);
+
+        const reach = { github: state.github.reachable, gitee: state.gitee.reachable };
+        const line = [];
+        line.push("GitHub：" + (reach.github ? '<span class="ok">可达</span>' : '<span class="warn">较慢/不可达</span>'));
+        line.push("Gitee：" + (reach.gitee ? '<span class="ok">可达</span>' : '<span class="warn">较慢/不可达</span>'));
 
         let rec = "gitee";
-        if (map.github && map.gitee) rec = preferGiteeByLocale() ? "gitee" : "github";
-        else if (map.github && !map.gitee) rec = "github";
-        else if (map.gitee && !map.github) rec = "gitee";
+        if (reach.github && reach.gitee) rec = preferGiteeByLocale() ? "gitee" : "github";
+        else if (reach.github && !reach.gitee) rec = "github";
+        else if (reach.gitee && !reach.github) rec = "gitee";
         else rec = preferGiteeByLocale() ? "gitee" : "github";
 
-        statusEl.innerHTML = parts.join(" · ") + " → 推荐点 <strong>" + MIRRORS[rec].label + "</strong>";
-        btnGitee.disabled = false;
-        btnGithub.disabled = false;
+        // Prefer a mirror that actually resolved a release asset
+        if (rec === "gitee" && !g.ok && h.ok) rec = "github";
+        if (rec === "github" && !h.ok && g.ok) rec = "gitee";
+
+        const verNote = (g.ok || h.ok)
+          ? " · 最新版已读取"
+          : ' · <span class="warn">未能读取 Release，请点按钮进仓库下载</span>';
+        statusEl.innerHTML =
+          line.join(" · ") +
+          " → 推荐点 <strong>" +
+          REPOS[rec].label +
+          "</strong>" +
+          verNote;
+
+        badgeGitee.hidden = true;
+        badgeGithub.hidden = true;
+        badgeGitee.classList.remove("rec");
+        badgeGithub.classList.remove("rec");
         if (rec === "gitee") {
           badgeGitee.hidden = false;
           badgeGitee.classList.add("rec");
@@ -296,11 +410,35 @@
           badgeGithub.classList.add("rec");
           badgeGithub.textContent = "推荐";
         }
-      }).catch(function () {
-        statusEl.innerHTML = '<span class="warn">探测失败</span>，两个按钮都可试。';
-        btnGitee.disabled = false;
-        btnGithub.disabled = false;
-      });
+      }
+
+      Promise.all([
+        fetchLatest(REPOS.gitee),
+        fetchLatest(REPOS.github),
+        probe(REPOS.gitee.probe, 2500).then(function (ok) { return { id: "gitee", reachable: ok }; }),
+        probe(REPOS.github.probe, 2500).then(function (ok) { return { id: "github", reachable: ok }; }),
+      ])
+        .then(function (results) {
+          results.forEach(function (r) {
+            if (r.id === "gitee" || r.id === "github") {
+              if ("ok" in r) {
+                state[r.id].ok = r.ok;
+                state[r.id].version = r.version || "";
+                state[r.id].fileName = r.fileName || "";
+                state[r.id].setup = r.setup || "";
+              }
+              if ("reachable" in r) state[r.id].reachable = !!r.reachable;
+            }
+          });
+          render();
+        })
+        .catch(function () {
+          statusEl.innerHTML = '<span class="warn">读取失败</span>，可点按钮打开两边 Release 页手动下载。';
+          wireButton(btnGitee, state.gitee, REPOS.gitee.releasesPage);
+          wireButton(btnGithub, state.github, REPOS.github.releasesPage);
+          verEl.textContent = "—";
+          fileEl.textContent = "请打开 Gitee / GitHub Release 页下载";
+        });
     })();
   </script>
 </body>

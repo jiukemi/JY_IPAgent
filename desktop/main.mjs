@@ -50,6 +50,10 @@ let pyProc = null
 let mainWindow = null
 /** @type {BrowserWindow | null} */
 let splashWindow = null
+/** @type {import('node:child_process').ChildProcessWithoutNullStreams | null} */
+let bootstrapProc = null
+/** @type {(() => void) | null} */
+let continueBootResolve = null
 
 function edition() {
   if (process.argv.includes('--light')) return 'light'
@@ -305,8 +309,28 @@ function killOrphanAgentServers() {
   }
 }
 
+function killBootstrapProc() {
+  const proc = bootstrapProc
+  bootstrapProc = null
+  if (!proc || proc.killed) return
+  try {
+    if (process.platform === 'win32' && proc.pid) {
+      execSync(`taskkill /pid ${proc.pid} /T /F`, { stdio: 'ignore', windowsHide: true, timeout: 15000 })
+    } else {
+      proc.kill()
+    }
+  } catch {
+    try {
+      proc.kill()
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 /** Clear runtime folder. Rename-first to dodge Windows file locks, then delete. */
 function clearRuntimeDir() {
+  killBootstrapProc()
   killBackend()
   const dir = runtimeDir()
   if (!fs.existsSync(dir)) {
@@ -557,6 +581,8 @@ function ensureRuntimeBootstrap() {
     })
 
     const seen = new Set()
+    let lastActivity = Date.now()
+    let stallNotified = false
     const handleLine = (line) => {
       const t = String(line || '').trimEnd()
       if (!t) return
@@ -564,6 +590,8 @@ function ensureRuntimeBootstrap() {
       if (seen.has(t)) return
       if (seen.size > 4000) seen.clear()
       seen.add(t)
+      lastActivity = Date.now()
+      stallNotified = false
       const m = t.match(/^PROGRESS:(\d+):(.*)$/)
       if (m) {
         splashSend({
@@ -602,6 +630,21 @@ function ensureRuntimeBootstrap() {
       }
     }
     const logTimer = setInterval(pumpLogFile, 400)
+    const stallTimer = setInterval(() => {
+      const idleSec = Math.round((Date.now() - lastActivity) / 1000)
+      if (idleSec >= 60 && !stallNotified) {
+        stallNotified = true
+        splashSend({
+          stallHint: true,
+          stallHintText:
+            '已超过 1 分钟没有新日志。可能正在下载（请稍候），若持续无变化请点「清除运行时并重试」或「打开日志」。',
+          line: `==> no new log for ${idleSec}s — check network / antivirus`,
+        })
+      }
+      if (idleSec >= 12 * 60) {
+        killBootstrapProc()
+      }
+    }, 15000)
 
     const ps = spawn(
       'powershell',
@@ -626,6 +669,7 @@ function ensureRuntimeBootstrap() {
         },
       },
     )
+    bootstrapProc = ps
     let out = ''
     let lineBuf = ''
 
@@ -640,6 +684,8 @@ function ensureRuntimeBootstrap() {
 
     const finish = (code) => {
       clearInterval(logTimer)
+      clearInterval(stallTimer)
+      if (bootstrapProc === ps) bootstrapProc = null
       pumpLogFile()
       if (logBuf.trim()) handleLine(logBuf.trim())
       if (lineBuf.trim()) {
@@ -669,13 +715,21 @@ function ensureRuntimeBootstrap() {
         resolve(true)
         return
       }
+      const idleFail =
+        code === null || code === 1
+          ? ''
+          : ''
+      const killedStall = (Date.now() - lastActivity) >= 12 * 60 * 1000
       const tail = combined.slice(-1500)
       reject(
         new Error(
-          `首次准备运行环境失败（exit=${code}）。\n` +
+          (killedStall
+            ? '首次准备超时：超过约 12 分钟没有新的日志输出（多为网络卡住或杀毒拦截下载）。\n'
+            : `首次准备运行环境失败（exit=${code}）。\n`) +
             `运行时目录：${runtimeDir()}\n` +
             `日志：${logPath}\n\n` +
-            (tail || '无输出，请检查网络或杀毒软件是否拦截。'),
+            (tail || '无输出，请检查网络或杀毒软件是否拦截。') +
+            idleFail,
         ),
       )
     }
@@ -684,6 +738,8 @@ function ensureRuntimeBootstrap() {
     ps.stderr.on('data', onChunk)
     ps.on('error', (err) => {
       clearInterval(logTimer)
+      clearInterval(stallTimer)
+      if (bootstrapProc === ps) bootstrapProc = null
       reject(err)
     })
     ps.on('exit', (code) => finish(code))
@@ -834,9 +890,6 @@ function startBackend() {
     // Never attach to a pre-existing :7860 — that may be a stale backend missing thumb routes.
   })
 }
-
-/** @type {(() => void) | null} */
-let continueBootResolve = null
 
 const WELCOME_MARKER = 'boot-welcome-v1.flag'
 const FREE_NOTICE_MARKER = 'free-private-notice-v1.flag'

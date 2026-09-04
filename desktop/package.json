@@ -1,7 +1,7 @@
 {
   "name": "agent-desktop",
   "private": true,
-  "version": "0.1.02",
+  "version": "0.1.03",
   "description": "九易AI智能体桌面壳 — 按需下载引擎",
   "main": "main.mjs",
   "scripts": {
@@ -50,7 +50,7 @@
           ]
         }
       ],
-      "artifactName": "九易AI智能体-Setup-0.1.02.${ext}"
+      "artifactName": "九易AI智能体-Setup-0.1.03.${ext}"
     },
     "nsis": {
       "oneClick": false,
