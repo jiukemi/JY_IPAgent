@@ -65,6 +65,27 @@
     .badge.rec { background: rgba(62, 207, 142, 0.25); color: #9dffc9; }
     .meta { margin-top: 16px; font-size: 0.8rem; color: var(--muted); line-height: 1.55; }
     .meta a { color: var(--accent); }
+    .specs {
+      width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-top: 4px;
+    }
+    .specs th, .specs td {
+      text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border);
+      vertical-align: top; line-height: 1.45;
+    }
+    .specs th { color: var(--muted); font-weight: 600; width: 18%; }
+    .specs td:nth-child(2) { color: var(--muted); }
+    .specs td:nth-child(3) { color: var(--text); }
+    .specs thead th { font-size: 0.72rem; text-transform: none; letter-spacing: 0.02em; }
+    .note-list {
+      margin: 12px 0 0; padding-left: 1.1em; color: var(--muted);
+      font-size: 0.8rem; line-height: 1.55;
+    }
+    .note-list li { margin-bottom: 4px; }
+    .note-list strong { color: var(--text); font-weight: 600; }
+    .btn-douyin { background: #161823; color: #fff; border-color: #fe2c55; }
+    .btn-douyin .hot { color: #fe2c55; font-weight: 700; }
+    .contact-lead { margin: 0; font-size: 0.875rem; color: var(--muted); line-height: 1.55; }
+    .contact-lead strong { color: var(--text); }
     footer { margin-top: 28px; font-size: 0.75rem; color: var(--muted); }
     footer a { color: var(--accent); }
   </style>
@@ -92,6 +113,93 @@
         文件：<code id="fileName">九易AI智能体-Setup-0.1.01.exe</code><br />
         两个镜像为同一安装包，任选一个即可。<br />        口播大镜像请用应用内夸克加速包，不在本安装包内。
       </p>
+    </section>
+
+    <section class="card">
+      <h2>电脑配置推荐</h2>
+      <p class="contact-lead">装机前先对照下表。应用内「设置 → 本机环境」也会按显存提示能否跑各引擎。</p>
+      <table class="specs">
+        <thead>
+          <tr>
+            <th>项目</th>
+            <th>最低（能试用）</th>
+            <th>推荐（完整本地口播）</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>系统</th>
+            <td>Windows 10 / 11（64 位）</td>
+            <td>同左</td>
+          </tr>
+          <tr>
+            <th>CPU</th>
+            <td>近两年主流四核及以上</td>
+            <td>同左或更好</td>
+          </tr>
+          <tr>
+            <th>内存</th>
+            <td>16 GB</td>
+            <td>16–32 GB</td>
+          </tr>
+          <tr>
+            <th>显卡</th>
+            <td><strong>NVIDIA 独显</strong>，约 <strong>6 GB</strong> 显存</td>
+            <td><strong>8 GB+</strong>（如 RTX 3060 / 4060 同级及以上）</td>
+          </tr>
+          <tr>
+            <th>磁盘</th>
+            <td>预留约 <strong>40 GB+</strong></td>
+            <td><strong>80 GB+</strong>（模型 + Docker 镜像）</td>
+          </tr>
+          <tr>
+            <th>其它</th>
+            <td>可装 Docker Desktop（口播主路径）</td>
+            <td>同左；Hub 拉不动时用夸克加速包</td>
+          </tr>
+        </tbody>
+      </table>
+      <ul class="note-list">
+        <li>口播（HeyGem）建议显存 ≥ <strong>6 GB</strong>；无 NVIDIA 独显时勿指望本地数字人口播。</li>
+        <li><strong>RTX 50 系</strong>须用夸克包里的「RTX50」镜像，勿下「通用显卡」包。</li>
+        <li>本安装包为 Mini，不含大镜像；详细说明见 <a href="./用户手册.md">用户手册</a>。</li>
+      </ul>
+    </section>
+
+    <section class="card">
+      <h2>问题反馈 · 抖音群聊</h2>
+      <p class="contact-lead">
+        安装失败、崩溃或功能建议，请加入抖音群聊反馈。打开抖音搜索 <strong>「九易」</strong>，进入相关群聊说明系统版本、显卡与现象即可。
+      </p>
+      <div class="actions">
+        <a
+          class="btn btn-douyin"
+          href="https://www.douyin.com/search/%E4%B9%9D%E6%98%93"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          抖音搜索 <span class="hot">九易</span> · 进群反馈
+        </a>
+      </div>
+      <p class="meta">本软件免费；请勿向陌生人转账，勿轻信第三方「付费版 / 破解版」。</p>
+    </section>
+
+    <section class="card">
+      <h2>定制智能体 · 抖音练习主播</h2>
+      <p class="contact-lead">
+        需要按业务定制智能体、口播流程或抖音练习主播方案，同样在抖音搜索 <strong>「九易」</strong>，私信练习主播沟通需求。
+      </p>
+      <div class="actions">
+        <a
+          class="btn btn-douyin"
+          href="https://www.douyin.com/search/%E4%B9%9D%E6%98%93"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          抖音搜索 <span class="hot">九易</span> · 联系练习主播
+        </a>
+      </div>
+      <p class="meta">定制为单独沟通事项，与本页免费安装包下载无关。</p>
     </section>
 
     <section class="card">
