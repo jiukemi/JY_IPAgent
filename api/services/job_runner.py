@@ -607,7 +607,8 @@ def run_engine_install(
     allowed["local_whisper"] = "setup_whisper.ps1"
     allowed["rembg"] = "setup_rembg.ps1"
     allowed["playwright"] = "setup_playwright.ps1"
-    optional = {"rembg", "playwright"}
+    allowed["ffmpeg"] = "setup_ffmpeg.ps1"
+    optional = {"rembg", "playwright", "ffmpeg"}
 
     def tick(p: float, msg: str) -> None:
         if on_progress:
@@ -631,7 +632,14 @@ def run_engine_install(
                 f"本机配置不支持「{st.get('label') or eng}」：{why}。请改用云端或 Piper 等轻量引擎。"
             )
     else:
-        st = {"label": "封面抠图 rembg" if eng == "rembg" else "浏览器引擎 Playwright"}
+        if eng == "rembg":
+            st = {"label": "封面抠图 rembg"}
+        elif eng == "playwright":
+            st = {"label": "浏览器引擎 Playwright"}
+        elif eng == "ffmpeg":
+            st = {"label": "FFmpeg"}
+        else:
+            st = {"label": eng}
 
     script_path = (setup_dir / script).resolve()
     if not script_path.is_file() or script_path.parent != setup_dir.resolve():

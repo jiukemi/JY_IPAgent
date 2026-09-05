@@ -56,10 +56,28 @@ def run(cmd: list[str], cwd: Path | None = None, env: dict | None = None) -> Non
 
 
 def ensure_ffmpeg(ffmpeg_bin: str) -> str:
+    """Resolve ffmpeg binary; prefer PATH, then runtime portable, then one-shot download."""
     resolved = shutil.which(ffmpeg_bin)
-    if resolved is None:
-        raise RuntimeError("ffmpeg not found in PATH")
-    return resolved
+    if resolved:
+        return resolved
+    try:
+        from workflow.runtime_bootstrap import apply_runtime_path, ensure_ffmpeg as ensure_rt_ffmpeg
+
+        apply_runtime_path()
+        again = shutil.which("ffmpeg") or shutil.which(ffmpeg_bin)
+        if again:
+            return again
+        st = ensure_rt_ffmpeg(download=True)
+        if st.get("ok") and st.get("path"):
+            apply_runtime_path()
+            return str(st["path"])
+        msg = st.get("message") or "下载失败"
+    except Exception as exc:
+        msg = str(exc)
+    raise RuntimeError(
+        "未找到 FFmpeg。请打开 设置 → 本机环境，安装「FFmpeg」，"
+        f"或将 ffmpeg 加入系统 PATH。详情：{msg}"
+    )
 
 
 def normalize_audio(ffmpeg_bin: str, audio_path: Path, wav_path: Path) -> None:

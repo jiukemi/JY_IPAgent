@@ -83,6 +83,16 @@ ENGINE_PROFILES: dict[str, dict] = {
         "summary": "Local Chinese ASR for script step (recommended)",
         "setup": "setup_funasr.ps1",
     },
+    "ffmpeg": {
+        "label": "FFmpeg",
+        "hardware": "CPU / no GPU",
+        "supports_clone": False,
+        "supports_dialect": False,
+        "supports_speed": False,
+        "online": False,
+        "summary": "Subtitles / cover / mux; skipped on first boot — install here or on first media use",
+        "setup": "setup_ffmpeg.ps1",
+    },
     "heygem": {
         "label": "HeyGem",
         "hardware": "NVIDIA GPU / Docker / 6GB+ VRAM",
@@ -129,6 +139,10 @@ _UI_ZH: dict[str, dict[str, str]] = {
     "funasr": {
         "hardware": "CPU / 可选 GPU · 4GB+ 内存",
         "summary": "文案步骤本地转写（SenseVoice，中文推荐）",
+    },
+    "ffmpeg": {
+        "hardware": "纯 CPU · 无需显卡",
+        "summary": "字幕/封面/合成必备；首启不下，设置一键装或首次用到时拉取",
     },
     "heygem": {
         "hardware": "NVIDIA GPU · Docker · 6GB+ 显存",

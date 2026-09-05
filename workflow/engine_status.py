@@ -23,6 +23,7 @@ MIN_VRAM_GB: dict[str, float] = {
     "edge": 0.0,
     "whisper": 0.0,
     "funasr": 0.0,
+    "ffmpeg": 0.0,
     "heygem": 6.0,
 }
 
@@ -37,6 +38,7 @@ PACKAGE_SIZE_GB: dict[str, float] = {
     "heygem": 8.0,
     "whisper": 1.5,
     "funasr": 2.0,
+    "ffmpeg": 0.15,
 }
 
 
@@ -226,6 +228,24 @@ def _funasr_status(cfg: dict) -> dict:
     return {"installed": ok, "ready": ok, "preset_ready": ok, "missing": missing}
 
 
+def _ffmpeg_status(_cfg: dict) -> dict:
+    from workflow.runtime_bootstrap import ensure_ffmpeg
+
+    st = ensure_ffmpeg(download=False)
+    ok = bool(st.get("ok"))
+    missing: list[str] = []
+    if not ok:
+        missing.append("FFmpeg 未安装（设置里一键下载，或首次合成时自动拉取）")
+    return {
+        "installed": ok,
+        "ready": ok,
+        "preset_ready": ok,
+        "missing": missing,
+        "path": st.get("path") or "",
+        "source": st.get("source") or "",
+    }
+
+
 def _heygem_status(cfg: dict) -> dict:
     missing: list[str] = []
     try:
@@ -266,6 +286,7 @@ _CHECKERS = {
     "qwen3_local": _qwen3_local_status,
     "whisper": _whisper_status,
     "funasr": _funasr_status,
+    "ffmpeg": _ffmpeg_status,
     "heygem": _heygem_status,
 }
 
@@ -362,6 +383,10 @@ def _usage_rules(engine: str) -> list[str]:
             "需先运行 scripts/setup/setup_qwen3_local.ps1 下载 CustomVoice（内置 9 音色）与 Base（克隆）。",
             "默认 0.6B（约 4GB+ 显存）；设置里可改 1.7B（约 8GB+）。切换引擎后音色列表会刷新。",
             "克隆须填写参考文案（与参考音频内容一致）。",
+        ],
+        "ffmpeg": [
+            "首次启动不下载；可在本页一键安装，或在字幕/封面/合成时自动拉取便携包。",
+            "本机已安装并加入 PATH 时会直接复用，无需再下。",
         ],
     }
     return rules.get(engine, ["切换引擎后请重新选择音色。"])
@@ -461,6 +486,7 @@ def scan_setup_engines(cfg: dict | None = None) -> list[dict]:
     """Engines shown in Settings → 本机环境 install panel (TTS + ASR + HeyGem)."""
     cfg = cfg or load_cfg()
     ids = [
+        "ffmpeg",
         "funasr",
         "whisper",
         "indextts",
@@ -480,6 +506,7 @@ def scan_setup_bundle(cfg: dict | None = None) -> dict:
     cfg = cfg or load_cfg()
     hw = detect_hardware()
     ids = [
+        "ffmpeg",
         "funasr",
         "whisper",
         "indextts",

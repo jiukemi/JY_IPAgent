@@ -37,8 +37,9 @@ ALLOWED_SCRIPTS["local_whisper"] = "setup_whisper.ps1"
 # Optional first-boot skips — one-click install when cover / browser needs them
 ALLOWED_SCRIPTS["rembg"] = "setup_rembg.ps1"
 ALLOWED_SCRIPTS["playwright"] = "setup_playwright.ps1"
+ALLOWED_SCRIPTS["ffmpeg"] = "setup_ffmpeg.ps1"
 
-OPTIONAL_INSTALL = frozenset({"rembg", "playwright"})
+OPTIONAL_INSTALL = frozenset({"rembg", "playwright", "ffmpeg"})
 
 
 @router.get("/hardware")

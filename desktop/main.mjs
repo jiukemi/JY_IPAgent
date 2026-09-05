@@ -1299,6 +1299,7 @@ function startBackend() {
       AGENT_EDITION: edition(),
       AGENT_RUNTIME_DIR: rt,
       AGENT_CONFIG: configPath,
+      AGENT_AUTO_FFMPEG: '0',
       PYTHONUTF8: '1',
       PYTHONUNBUFFERED: '1',
       NO_PROXY: '127.0.0.1,localhost,::1',
@@ -1383,7 +1384,7 @@ function startBackend() {
       splashSend({
         pct: Math.min(95, 90 + Math.floor(elapsed / 18000)),
         label: '等待后端就绪…',
-        line: `polling :7860–7890 (${Math.round(elapsed / 1000)}s)`,
+        line: `polling :7860–7890 (${Math.round(elapsed / 1000)}s) — 若超时请看运行时 bootstrap.log / 导出诊断包`,
       })
       for (let port = 7860; port <= 7890; port++) {
         const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
@@ -1431,9 +1432,10 @@ function welcomeGuideText() {
   return (
     '【引擎安装引导】安装包不含大模型，请按需下载：\n\n' +
     '1. 打开设置 →「本机环境 · GPU 与模型」\n' +
-    '2. 配音：安装 IndexTTS2（需 NVIDIA 显卡）或轻量 Piper\n' +
-    '3. 文案提取：需要时安装 FunASR 或 Whisper\n' +
-    '4. 口播：先安装并打开 Docker Desktop，再在口播页点「一键启动」\n' +
+    '2. 基础：需要时安装 FFmpeg（字幕/封面/合成；首启不自动下）\n' +
+    '3. 配音：安装 IndexTTS2（需 NVIDIA 显卡）或轻量 Piper\n' +
+    '4. 文案提取：需要时安装 FunASR 或 Whisper\n' +
+    '5. 口播：先安装并打开 Docker Desktop，再在口播页点「一键启动」\n' +
     '   （首次拉镜像约十几 GB，只下一次；按显卡自动选通用/50 系）\n\n' +
     '【可选·夸克加速】默认在线引导即可；仅当下载很慢/失败时，用夸克分享下加速包到「下载」文件夹，启动窗点「夸克加速：扫描下载」。未装夸克客户端也可用浏览器下载。\n\n' +
     '安装进度与日志可在顶部「任务中心」查看。\n' +

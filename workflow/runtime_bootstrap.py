@@ -37,7 +37,7 @@ FFMPEG_ZIP_URLS = (
 )
 
 
-def _download(url: str, dest: Path, timeout: int = 600) -> None:
+def _download(url: str, dest: Path, timeout: int = 45) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     req = Request(url, headers={"User-Agent": "agent-runtime-bootstrap/1.0"})
     with urlopen(req, timeout=timeout) as resp, dest.open("wb") as out:

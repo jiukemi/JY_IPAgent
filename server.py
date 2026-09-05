@@ -46,8 +46,9 @@ if __name__ == "__main__":
         from workflow.runtime_bootstrap import apply_runtime_path, ensure_ffmpeg
 
         apply_runtime_path()
-        # Dev/packaged: ensure ffmpeg without blocking forever if offline
-        ensure_ffmpeg(download=os.environ.get("AGENT_AUTO_FFMPEG", "1") not in ("0", "false", "no"))
+        # Never block backend listen on FFmpeg download (offline / slow mirrors look like
+        # "polling 7860-7890"). Install via Settings or first media use.
+        ensure_ffmpeg(download=False)
     except Exception as exc:
         print(f"* runtime bootstrap skipped: {exc}")
     boot_workers()

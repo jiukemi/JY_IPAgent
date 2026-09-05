@@ -447,7 +447,9 @@ Write-Log "==> skip: playwright install chromium (first-boot). Use Chrome channe
 Write-ProgressLine 80 "Skip optional rembg (install later from settings if needed)"
 Write-Log "==> skip: rembg[cpu] on first-boot (optional; large download)"
 
-# --- FFmpeg: prefer PATH ---
+# --- FFmpeg: prefer PATH / already downloaded; do NOT download on first boot ---
+# Large zip from GitHub mirrors can hang splash for many minutes offline.
+# Install later from Settings or on first media use (pipeline.ensure_ffmpeg).
 Write-ProgressLine 88 "Check FFmpeg"
 $sysFfmpeg = Get-Command ffmpeg -ErrorAction SilentlyContinue
 if ($sysFfmpeg) {
@@ -455,22 +457,8 @@ if ($sysFfmpeg) {
 } elseif (Test-Path $FfmpegExe) {
   Write-Log "==> portable FFmpeg already present"
 } else {
-  Write-Log "==> download FFmpeg"
-  $env:AGENT_RUNTIME_DIR = $RuntimeRoot
-  $env:PYTHONPATH = $Root
-  $probeFf = Join-Path $RuntimeRoot "_probe_ffmpeg.py"
-  # Script path is under runtime/; insert Root so "import workflow" works.
-  $rootLit = $Root.Replace("\", "\\")
-  @"
-import sys
-sys.path.insert(0, r"$rootLit")
-from workflow.runtime_bootstrap import ensure_ffmpeg
-import json
-print(json.dumps(ensure_ffmpeg(True), ensure_ascii=False))
-"@ | Set-Content -Path $probeFf -Encoding ASCII
-  $code = Invoke-PyExe -Exe $PyExe -Args @($probeFf) -HeartbeatPct 90 -HeartbeatLabel "Download FFmpeg"
-  Remove-Item $probeFf -Force -ErrorAction SilentlyContinue
-  if ($code -ne 0) { Write-Log "!! FFmpeg download failed (non-fatal)" }
+  Write-ProgressLine 88 "Skip FFmpeg download (install later from settings if needed)"
+  Write-Log "==> skip: FFmpeg download on first-boot (optional; Settings / first media use)"
 }
 
 Write-ProgressLine 100 "Runtime ready"
