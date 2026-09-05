@@ -539,6 +539,9 @@
         if (typeof pct === 'number' && !Number.isNaN(pct)) {
           lastPct = Math.max(0, Math.min(100, pct))
           targetPct = Math.max(targetPct, lastPct)
+          // Jump UI to real PROGRESS immediately (do not linger at soft-crawl ~8%)
+          displayPct = Math.max(displayPct, lastPct)
+          paintPct(displayPct)
           barEl.classList.remove('indeterminate')
         }
         if (label) {
@@ -551,14 +554,21 @@
         if (!line) return
         const t = String(line).replace(/\r/g, '')
         if (!t.trim()) return
-        lastLine = t.trim().replace(/^==>\s*/, '').slice(0, 120)
+        // Also drive bar from embedded PROGRESS lines in the log stream
+        const pm = t.trim().match(/^PROGRESS:(\d+):(.*)$/)
+        if (pm) {
+          setProgress(Number(pm[1]), pm[2].trim() || '处理中')
+        }
+        lastLine = t.trim().replace(/^==>\s*/, '').replace(/^PROGRESS:\d+:/, '').slice(0, 120)
         lastLogAt = Date.now()
         stallTip.classList.remove('show')
         logEl.textContent += (logEl.textContent ? '\n' : '') + t.trimEnd()
         logEl.scrollTop = logEl.scrollHeight
         // Live logs nudge the soft-crawl ceiling so the bar isn't stuck at 5%
-        if (!failed && targetPct < 90) {
-          targetPct = Math.min(90, targetPct + 0.4)
+        if (!failed && !pm && targetPct < 90) {
+          targetPct = Math.min(90, Math.max(targetPct, lastPct) + 1.5)
+          displayPct = Math.max(displayPct, Math.min(targetPct, displayPct + 1))
+          paintPct(displayPct)
         }
         if (!failed) setMarquee((phaseEl.textContent || '准备中') + ' · ' + lastLine)
       }

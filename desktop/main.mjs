@@ -381,8 +381,32 @@ function registerSplashIpc() {
     } catch {
       /* ignore */
     }
-    await shell.openPath(dir)
-    return true
+    const logFile = path.join(dir, 'bootstrap.log')
+    try {
+      if (!fs.existsSync(logFile)) {
+        fs.writeFileSync(logFile, '', 'utf8')
+      }
+    } catch {
+      /* ignore */
+    }
+    // Prefer explorer /select so user actually sees the log file (shell.openPath can no-op)
+    if (process.platform === 'win32') {
+      try {
+        spawn('explorer.exe', ['/select,', logFile], { windowsHide: false, detached: true, stdio: 'ignore' }).unref()
+        return { ok: true, path: logFile }
+      } catch {
+        /* fall through */
+      }
+    }
+    const err = await shell.openPath(dir)
+    if (err) {
+      try {
+        await shell.openExternal(pathToFileURL(dir).href)
+      } catch {
+        /* ignore */
+      }
+    }
+    return { ok: !err, path: dir, message: err || '' }
   })
   ipcMain.handle('boot:quit', () => {
     app.quit()
@@ -666,6 +690,14 @@ function ensureRuntimeBootstrap() {
           ...process.env,
           AGENT_RUNTIME_DIR: runtimeDir(),
           PYTHONUNBUFFERED: '1',
+          NO_PROXY: '127.0.0.1,localhost,::1',
+          no_proxy: '127.0.0.1,localhost,::1',
+          HTTP_PROXY: '',
+          HTTPS_PROXY: '',
+          ALL_PROXY: '',
+          http_proxy: '',
+          https_proxy: '',
+          all_proxy: '',
         },
       },
     )
@@ -810,8 +842,17 @@ function startBackend() {
       AGENT_RUNTIME_DIR: rt,
       AGENT_CONFIG: configPath,
       PYTHONUTF8: '1',
+      PYTHONUNBUFFERED: '1',
       NO_PROXY: '127.0.0.1,localhost,::1',
+      no_proxy: '127.0.0.1,localhost,::1',
     }
+    // Closing VPN while system proxy still points at 127.0.0.1:7897 breaks local calls
+    delete env.HTTP_PROXY
+    delete env.HTTPS_PROXY
+    delete env.ALL_PROXY
+    delete env.http_proxy
+    delete env.https_proxy
+    delete env.all_proxy
     if (app.isPackaged || process.argv.includes('--strict-user')) {
       env.AGENT_STRICT_USER = '1'
     }
@@ -829,14 +870,14 @@ function startBackend() {
       subtitle: '正在启动后端服务…',
       pct: 92,
       label: '启动 Python 后端',
-      mode: 'indeterminate',
       line: `python → ${found.cmd}`,
     })
     splashSend({ pct: 90, label: '清理旧后端进程…', line: '释放 7860–7890 端口' })
     killOrphanAgentServers()
     killBackend()
 
-    const childArgs = [...found.args, serverPy]
+    // -u: unbuffered stdout so "Uvicorn running on …" reaches Electron promptly
+    const childArgs = [...found.args, '-u', serverPy]
     pyProc = spawn(found.cmd, childArgs, {
       cwd: ROOT,
       env,
@@ -845,6 +886,19 @@ function startBackend() {
 
     let buf = ''
     let resolved = false
+    const finishPort = (port) => {
+      if (resolved) return
+      resolved = true
+      clearInterval(pollTimer)
+      splashSend({
+        pct: 96,
+        label: `等待健康检查 :${port}`,
+        line: `backend → http://127.0.0.1:${port}`,
+      })
+      waitForHealth(port)
+        .then(() => resolve(port))
+        .catch(reject)
+    }
     const tryPort = (chunk) => {
       const text = chunk.toString()
       buf += text
@@ -852,19 +906,41 @@ function startBackend() {
         if (line.trim()) splashSend({ line: line.trim() })
       }
       const m = buf.match(/http:\/\/127\.0\.0\.1:(\d+)/)
-      if (m && !resolved) {
-        resolved = true
-        const port = Number(m[1])
-        splashSend({ pct: 96, label: `等待健康检查 :${port}` })
-        waitForHealth(port)
-          .then(() => resolve(port))
-          .catch(reject)
-      }
+      if (m) finishPort(Number(m[1]))
     }
+
+    // Fallback when Python stdout is buffered: actively poll health endpoints
+    const pollStarted = Date.now()
+    const pollTimer = setInterval(() => {
+      if (resolved) {
+        clearInterval(pollTimer)
+        return
+      }
+      const elapsed = Date.now() - pollStarted
+      if (elapsed > 90000) {
+        clearInterval(pollTimer)
+        if (!resolved) reject(new Error('后端启动超时（未检测到健康端口 7860–7890）'))
+        return
+      }
+      splashSend({
+        pct: Math.min(95, 90 + Math.floor(elapsed / 18000)),
+        label: '等待后端就绪…',
+        line: `polling :7860–7890 (${Math.round(elapsed / 1000)}s)`,
+      })
+      for (let port = 7860; port <= 7890; port++) {
+        const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
+          res.resume()
+          if (res.statusCode === 200) finishPort(port)
+        })
+        req.on('error', () => {})
+        req.setTimeout(800, () => req.destroy())
+      }
+    }, 1200)
 
     pyProc.stdout.on('data', tryPort)
     pyProc.stderr.on('data', tryPort)
     pyProc.on('error', (err) => {
+      clearInterval(pollTimer)
       if (!resolved) {
         reject(
           new Error(
@@ -877,6 +953,7 @@ function startBackend() {
       }
     })
     pyProc.on('exit', (code) => {
+      clearInterval(pollTimer)
       if (!resolved) {
         const tail = buf.trim().slice(-800)
         reject(
@@ -886,8 +963,6 @@ function startBackend() {
         )
       }
     })
-
-    // Never attach to a pre-existing :7860 — that may be a stale backend missing thumb routes.
   })
 }
 
