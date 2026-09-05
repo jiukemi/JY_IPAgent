@@ -171,35 +171,26 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
           args: prep.args,
         })
         push(elev.message || '')
-        if (elev.ok) {
-          setAlert({
-            title: '请点「是」允许安装',
-            message:
-              `${elev.message || ''}\n\n` +
-              `安装包：${prep.installer || installerPath}\n` +
-              `目标盘：${prep.install_root || installDrive}\n\n` +
-              '装完后打开 Docker Desktop，登录可跳过，再回本向导点「重新检测」。',
-            variant: 'info',
-          })
-        } else {
-          const manual = elev.cmd_path || prep.cmd_path || ''
-          setAlert({
-            title: '需要你手动点一次管理员权限',
-            message:
-              `安装包位置已经识别好了，不是没找到文件。\n` +
-              `是「用管理员身份启动安装」这一步没成功（常见：点了「否」，或安全软件拦截）。\n\n` +
-              `${elev.message || ''}\n\n` +
-              `请到文件夹里，右键下面这个文件 →「以管理员身份运行」：\n${manual}\n\n` +
-              `装到：${prep.install_root || installDrive}`,
-            variant: 'warning',
-          })
-          // Best-effort：打开脚本所在文件夹，方便小白右键
+        const deskFile = elev.cmd_path || prep.cmd_path || ''
+        setAlert({
+          title: elev.ok ? '请看桌面 / 管理员确认' : '请用桌面上的安装脚本',
+          message:
+            `${elev.message || ''}\n\n` +
+            `安装包：${prep.installer || installerPath}\n` +
+            `装到：${prep.install_root || installDrive}\n\n` +
+            (deskFile
+              ? `桌面文件（一定找得到）：九易AI-安装Docker.cmd\n完整路径：${deskFile}\n右键它 →「以管理员身份运行」。`
+              : '') +
+            (elev.ok ? '\n\n装完后打开 Docker，再点「重新检测」。' : ''),
+          variant: elev.ok ? 'info' : 'warning',
+        })
+        if (deskFile) {
           try {
             await (
               window as unknown as {
                 agentDesktop?: { openPath?: (p: string) => Promise<unknown> }
               }
-            ).agentDesktop?.openPath?.(manual)
+            ).agentDesktop?.openPath?.(deskFile)
           } catch {
             /* ignore */
           }

@@ -1026,6 +1026,7 @@ function registerSplashIpc() {
       path.join(ROOT, 'data'),
       path.join(runtimeDir(), 'data'),
       localApp ? path.join(localApp, 'JY_IPAgent') : '',
+      app.getPath('desktop'),
       os.tmpdir(),
     ]
       .filter(Boolean)
@@ -1033,9 +1034,15 @@ function registerSplashIpc() {
     const okRoot = allowed.some(
       (root) => resolved === root || resolved.startsWith(root + path.sep),
     )
-    if (!okRoot) return { ok: false, message: '只能打开本机数据 / 安装脚本目录内的文件' }
-    if (!fs.existsSync(resolved)) return { ok: false, message: '文件不存在' }
-    // If it's a file, reveal in Explorer; if dir, open it
+    if (!okRoot) return { ok: false, message: '只能打开本机数据 / 桌面安装脚本' }
+    if (!fs.existsSync(resolved)) return { ok: false, message: `文件不存在：${resolved}` }
+    // Prefer reveal-in-folder so user literally sees the file
+    try {
+      shell.showItemInFolder(resolved)
+      return { ok: true }
+    } catch {
+      /* fall through */
+    }
     try {
       if (fs.statSync(resolved).isFile()) {
         spawn('explorer.exe', [`/select,${resolved}`], { windowsHide: true, detached: true, stdio: 'ignore' })
@@ -1051,117 +1058,142 @@ function registerSplashIpc() {
 
   ipcMain.handle('desktop:elevate-docker-install', async (_e, payload) => {
     const installer = typeof payload?.installer === 'string' ? payload.installer.trim() : ''
-    const cmdPath = typeof payload?.cmd_path === 'string' ? payload.cmd_path.trim() : ''
+    const cmdPathIn = typeof payload?.cmd_path === 'string' ? payload.cmd_path.trim() : ''
     const installRoot = typeof payload?.install_root === 'string' ? payload.install_root.trim() : ''
     const args = Array.isArray(payload?.args) ? payload.args.map(String) : []
 
-    // Prefer elevating the .exe directly (RunAs on .cmd is flaky). Fallback to .cmd via cmd.exe.
-    const exe = installer && fs.existsSync(installer) ? installer : ''
-    const script = cmdPath && fs.existsSync(cmdPath) ? cmdPath : ''
-    if (!exe && !script) {
-      return { ok: false, message: '安装包或安装脚本不存在（路径无效）。' }
+    const exe = installer && fs.existsSync(installer) ? path.resolve(installer) : ''
+    if (!exe) {
+      return { ok: false, message: '安装包文件不存在，请重新扫描/选择 Docker Desktop 安装包。' }
+    }
+    if (!installRoot) {
+      return { ok: false, message: '未指定安装目标磁盘。' }
     }
 
-    const ps1 = path.join(os.tmpdir(), `jy-elevate-docker-${Date.now()}.ps1`)
-    let psBody = ''
-    if (exe && args.length >= 1) {
-      // Direct: DockerDesktopInstaller.exe install --accept-license ...
-      const argList = args.map((a) => `'${String(a).replace(/'/g, "''")}'`).join(',')
-      psBody = `
-$ErrorActionPreference = 'Stop'
-$exe = ${JSON.stringify(exe)}
-$arg = @(${argList})
-$p = Start-Process -FilePath $exe -ArgumentList $arg -Verb RunAs -PassThru
-if ($null -eq $p) { throw 'UAC cancelled' }
-Write-Output ('PID=' + $p.Id)
-`
-    } else if (exe && installRoot) {
-      const appDir = path.join(installRoot, 'DockerDesktop')
-      const wslRoot = path.join(installRoot, 'wsl')
-      const winRoot = path.join(installRoot, 'windows-containers')
-      psBody = `
-$ErrorActionPreference = 'Stop'
-$exe = ${JSON.stringify(exe)}
-$arg = @(
-  'install',
-  '--accept-license',
-  ${JSON.stringify(`--installation-dir=${appDir}`)},
-  ${JSON.stringify(`--wsl-default-data-root=${wslRoot}`)},
-  ${JSON.stringify(`--windows-containers-default-data-root=${winRoot}`)}
-)
-$p = Start-Process -FilePath $exe -ArgumentList $arg -Verb RunAs -PassThru
-if ($null -eq $p) { throw 'UAC cancelled' }
-Write-Output ('PID=' + $p.Id)
-`
-    } else {
-      // .cmd via cmd.exe /c — more reliable than RunAs on the .cmd file itself
-      psBody = `
-$ErrorActionPreference = 'Stop'
-$cmd = ${JSON.stringify(script)}
-$p = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $cmd) -Verb RunAs -PassThru
-if ($null -eq $p) { throw 'UAC cancelled' }
-Write-Output ('PID=' + $p.Id)
-`
+    // Always (re)write a visible Desktop script so用户绝对找得到
+    const appDir = path.join(installRoot, 'DockerDesktop')
+    const wslRoot = path.join(installRoot, 'wsl')
+    const winRoot = path.join(installRoot, 'windows-containers')
+    for (const d of [appDir, wslRoot, winRoot]) {
+      try {
+        fs.mkdirSync(d, { recursive: true })
+      } catch {
+        /* ignore */
+      }
+    }
+    const cmdBody = [
+      '@echo off',
+      'chcp 65001 >nul',
+      'setlocal',
+      'title 九易AI - 安装 Docker Desktop',
+      'echo ========================================',
+      'echo  九易AI：安装 Docker 到所选磁盘',
+      `echo  目标: ${installRoot}`,
+      'echo ========================================',
+      'echo.',
+      `"${exe}" install --accept-license --installation-dir=${appDir} --wsl-default-data-root=${wslRoot} --windows-containers-default-data-root=${winRoot}`,
+      'set ERR=%ERRORLEVEL%',
+      'echo.',
+      'if not %ERR%==0 (',
+      '  echo [失败] 退出码 %ERR%',
+      '  pause',
+      '  exit /b %ERR%',
+      ')',
+      'echo [完成] 可关闭窗口，然后打开 Docker Desktop。',
+      'pause',
+      'exit /b 0',
+      '',
+    ].join('\r\n')
+
+    const desk = app.getPath('desktop')
+    const deskCmd = path.join(desk, '九易AI-安装Docker.cmd')
+    const localCmd = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'JY_IPAgent', '九易AI-安装Docker.cmd')
+    try {
+      fs.mkdirSync(path.dirname(localCmd), { recursive: true })
+      fs.writeFileSync(deskCmd, cmdBody, 'utf8')
+      fs.writeFileSync(localCmd, cmdBody, 'utf8')
+    } catch (e) {
+      return {
+        ok: false,
+        message: `无法在桌面写入安装脚本：${e instanceof Error ? e.message : String(e)}`,
+        cmd_path: cmdPathIn || '',
+      }
+    }
+    if (!fs.existsSync(deskCmd)) {
+      return { ok: false, message: `桌面脚本写入失败：${deskCmd}`, cmd_path: localCmd }
+    }
+
+    const elevateArgs =
+      args.length >= 1
+        ? args.join(' ')
+        : `install --accept-license --installation-dir=${appDir} --wsl-default-data-root=${wslRoot} --windows-containers-default-data-root=${winRoot}`
+
+    // Shell.Application.ShellExecute runas — most reliable UAC from Electron
+    const vbs = path.join(os.tmpdir(), `jy-elevate-docker-${Date.now()}.vbs`)
+    const vbsBody =
+      'Set sh = CreateObject("Shell.Application")\r\n' +
+      `sh.ShellExecute ${JSON.stringify(exe)}, ${JSON.stringify(elevateArgs)}, "", "runas", 1\r\n`
+    try {
+      fs.writeFileSync(vbs, vbsBody, 'utf8')
+    } catch (e) {
+      return {
+        ok: false,
+        message: `无法写入提权脚本：${e instanceof Error ? e.message : String(e)}`,
+        cmd_path: deskCmd,
+      }
     }
 
     try {
-      fs.writeFileSync(ps1, psBody, 'utf8')
+      spawn('wscript.exe', [vbs], { windowsHide: true, detached: true, stdio: 'ignore' }).unref()
     } catch (e) {
-      return { ok: false, message: `无法写入提权脚本：${e instanceof Error ? e.message : String(e)}` }
+      try {
+        fs.unlinkSync(vbs)
+      } catch {
+        /* ignore */
+      }
+      // Fall through to reveal desktop script
+      try {
+        shell.showItemInFolder(deskCmd)
+      } catch {
+        spawn('explorer.exe', [`/select,${deskCmd}`], { detached: true, stdio: 'ignore' })
+      }
+      return {
+        ok: false,
+        message:
+          `自动请求管理员权限失败。已在【桌面】生成「九易AI-安装Docker.cmd」，请右键它 →「以管理员身份运行」。\n` +
+          `完整路径：${deskCmd}`,
+        cmd_path: deskCmd,
+      }
     }
 
-    return await new Promise((resolve) => {
-      const child = spawn(
-        'powershell.exe',
-        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1],
-        { windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] },
-      )
-      let out = ''
-      let err = ''
-      child.stdout?.on('data', (c) => {
-        out += c.toString()
-      })
-      child.stderr?.on('data', (c) => {
-        err += c.toString()
-      })
-      child.on('error', (e) => {
-        try {
-          fs.unlinkSync(ps1)
-        } catch {
-          /* ignore */
-        }
-        resolve({
-          ok: false,
-          message: `无法启动提权过程：${e.message}`,
-          cmd_path: script || '',
-        })
-      })
-      child.on('exit', (code) => {
-        try {
-          fs.unlinkSync(ps1)
-        } catch {
-          /* ignore */
-        }
-        if (code === 0) {
-          resolve({
-            ok: true,
-            message:
-              '已请求管理员权限。请在「用户账户控制」窗口点「是」（也可能在任务栏闪烁）。点「是」后开始往所选盘安装。',
-            detail: out.trim(),
-            cmd_path: script || '',
-          })
-          return
-        }
-        const detail = (err || out || '').trim().slice(0, 400)
-        resolve({
-          ok: false,
-          message:
-            '安装包已经找到了，但「管理员确认」没有通过（可能点了「否」，或系统拦截了提权）。' +
-            (detail ? `\n详情：${detail}` : ''),
-          cmd_path: script || '',
-        })
-      })
-    })
+    // Clean vbs later; ShellExecute is async — always tell user about Desktop fallback
+    setTimeout(() => {
+      try {
+        fs.unlinkSync(vbs)
+      } catch {
+        /* ignore */
+      }
+    }, 15000)
+
+    // Also reveal the desktop script so用户看得见（即使 UAC 已弹出也不妨碍）
+    try {
+      shell.showItemInFolder(deskCmd)
+    } catch {
+      try {
+        spawn('explorer.exe', [`/select,${deskCmd}`], { detached: true, stdio: 'ignore' })
+      } catch {
+        /* ignore */
+      }
+    }
+
+    return {
+      ok: true,
+      message:
+        '已请求管理员权限：请看是否弹出「用户账户控制」，点「是」。\n\n' +
+        '如果没有弹窗：请到【桌面】找到「九易AI-安装Docker.cmd」，右键 →「以管理员身份运行」。\n' +
+        `（已为你打开该文件所在位置）\n路径：${deskCmd}`,
+      cmd_path: deskCmd,
+    }
   })
 }
 

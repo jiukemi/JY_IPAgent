@@ -274,41 +274,72 @@ def _download_docker_installer(dest: Path) -> None:
 
 
 def _write_docker_install_cmd(installer: Path, install_root: Path) -> Path:
-    """Write a .cmd that runs the installer with custom dirs (UAC-friendly)."""
-    # Always use no-space path — official "Docker Desktop Installer.exe" breaks cmd quoting.
+    """Write install .cmd to Desktop (visible) and LOCALAPPDATA (stable)."""
     installer = _normalize_installer_path(installer)
     app_dir = install_root / "DockerDesktop"
     wsl_root = install_root / "wsl"
     win_root = install_root / "windows-containers"
     for p in (app_dir, wsl_root, win_root):
         p.mkdir(parents=True, exist_ok=True)
-    cache = _installer_cache_path().parent
-    cache.mkdir(parents=True, exist_ok=True)
-    cmd_path = cache / "install_docker_custom_drive.cmd"
 
-    # Paths here have no spaces by design (D:\Docker\..., DockerDesktopInstaller.exe).
     exe = str(installer)
     app_s, wsl_s, win_s = str(app_dir), str(wsl_root), str(win_root)
     lines = [
         "@echo off",
         "chcp 65001 >nul",
         "setlocal",
-        "echo Installing Docker Desktop to custom drive...",
-        f"echo Installer: {exe}",
-        f"echo Target: {install_root}",
+        "title 九易AI - 安装 Docker Desktop",
+        "echo ========================================",
+        "echo  九易AI：安装 Docker 到所选磁盘",
+        "echo  目标: " + str(install_root),
+        "echo ========================================",
+        "echo.",
         f'"{exe}" install --accept-license --installation-dir={app_s} --wsl-default-data-root={wsl_s} --windows-containers-default-data-root={win_s}',
         "set ERR=%ERRORLEVEL%",
+        "echo.",
         "if not %ERR%==0 (",
-        "  echo Install failed, exit=%ERR%",
+        "  echo [失败] 退出码 %ERR%",
+        "  echo 请把本窗口内容截图反馈。",
         "  pause",
         "  exit /b %ERR%",
         ")",
-        "echo Install finished. You can close this window.",
+        "echo [完成] 可以关闭本窗口，然后打开 Docker Desktop。",
+        "pause",
         "exit /b 0",
         "",
     ]
-    cmd_path.write_text("\r\n".join(lines), encoding="utf-8")
-    return cmd_path
+    body = "\r\n".join(lines)
+
+    written: list[Path] = []
+    # 1) Desktop — 小白找得到
+    desk_candidates = []
+    user = Path.home()
+    desk_candidates.append(user / "Desktop")
+    desk_candidates.append(user / "桌面")
+    pub = os.environ.get("PUBLIC")
+    if pub:
+        desk_candidates.append(Path(pub) / "Desktop")
+        desk_candidates.append(Path(pub) / "桌面")
+    for desk in desk_candidates:
+        try:
+            if desk.is_dir():
+                p = desk / "九易AI-安装Docker.cmd"
+                p.write_text(body, encoding="utf-8")
+                if p.is_file():
+                    written.append(p.resolve())
+                    break
+        except OSError:
+            continue
+
+    # 2) LOCALAPPDATA backup
+    cache = _installer_cache_path().parent
+    cache.mkdir(parents=True, exist_ok=True)
+    cache_cmd = cache / "九易AI-安装Docker.cmd"
+    cache_cmd.write_text(body, encoding="utf-8")
+    written.append(cache_cmd.resolve())
+
+    # Prefer desktop path for UI
+    return written[0] if written else cache_cmd
 
 
 def _elevate_docker_installer(installer: Path, install_root: Path) -> Path:
@@ -425,6 +456,8 @@ def prepare_docker_desktop_install(
         "installer": str(normalized),
         "install_root": str(install_root),
         "cmd_path": str(cmd_path),
+        "cmd_exists": Path(cmd_path).is_file(),
+        "desktop_hint": "九易AI-安装Docker.cmd（在桌面）",
         "args": [
             "install",
             "--accept-license",
@@ -433,13 +466,8 @@ def prepare_docker_desktop_install(
             f"--windows-containers-default-data-root={install_root / 'windows-containers'}",
         ],
         "message": (
-            f"已准备好安装包（{normalized.name}）→ 将装到 {install_root}。"
-            + (
-                "（原文件名带空格，已复制为无空格文件。）"
-                if " " in str(installer)
-                else ""
-            )
-            + "下一步需要管理员权限。"
+            f"已在桌面生成「九易AI-安装Docker.cmd」。"
+            f"安装包：{normalized.name} → 目标：{install_root}。"
         ),
     }
 
