@@ -67,7 +67,7 @@ def login(body: LoginBody | None = None) -> dict:
             for k in (
                 "executable doesn't exist",
                 "chromium",
-                "browserType.launch",
+                "browsertype.launch",
                 "playwright",
                 "chrome",
             )

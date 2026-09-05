@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 # One-shot local stack for 旗博士同款 workflow
 # Run: .\scripts\setup\setup_local_all.ps1
 

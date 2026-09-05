@@ -1,4 +1,4 @@
-# IndexTTS2 setup (default TTS backend)
+﻿# IndexTTS2 setup (default TTS backend)
 # Run: .\scripts\setup\setup_indextts.ps1
 # Packaged app: prefer %AGENT_RUNTIME_DIR%\engines\IndexTTS (writable).
 # Source fetch (real-user path): Gitee mirrors first -> CN git proxies -> ZIP -> official GitHub.
@@ -267,19 +267,29 @@ if (Test-Path "$InstallDir\.venv") {
 Write-Host "==> Download IndexTTS-2 checkpoints (large, may take a while)..."
 $env:HF_ENDPOINT = "https://hf-mirror.com"
 $ckpt = Join-Path $InstallDir "checkpoints"
-if (-not (Test-Path "$ckpt\config.yaml")) {
-    # Prefer ModelScope in CN when available
+if (-not (Test-Path (Join-Path $ckpt "config.yaml"))) {
+    # Prefer ModelScope in CN when available.
+    # Use a temp .py file — inline `python -c "..."` breaks under nested quotes / paths.
     $msOk = $false
     try {
         if ($Py -eq "py") { & py -3.11 -m pip install -q modelscope }
         else { & $Py -m pip install -q modelscope }
         Write-Host "==> try ModelScope download IndexTeam/IndexTTS-2"
-        if ($Py -eq "py") {
-            & py -3.11 -c "from modelscope import snapshot_download; snapshot_download('IndexTeam/IndexTTS-2', local_dir=r'$ckpt')"
-        } else {
-            & $Py -c "from modelscope import snapshot_download; snapshot_download('IndexTeam/IndexTTS-2', local_dir=r'$ckpt')"
+        $dlPy = Join-Path $InstallDir "_ms_download_indextts2.py"
+        $env:INDEXTTS_CKPT_DIR = $ckpt
+        @(
+            "import os"
+            "from modelscope import snapshot_download"
+            "snapshot_download('IndexTeam/IndexTTS-2', local_dir=os.environ['INDEXTTS_CKPT_DIR'])"
+        ) | Set-Content -Path $dlPy -Encoding UTF8
+        try {
+            if ($Py -eq "py") { & py -3.11 $dlPy }
+            else { & $Py $dlPy }
+        } finally {
+            Remove-Item $dlPy -Force -ErrorAction SilentlyContinue
+            Remove-Item Env:INDEXTTS_CKPT_DIR -ErrorAction SilentlyContinue
         }
-        if (Test-Path "$ckpt\config.yaml") { $msOk = $true }
+        if (Test-Path (Join-Path $ckpt "config.yaml")) { $msOk = $true }
     } catch {
         Write-Host "    ModelScope failed: $($_.Exception.Message)"
     }

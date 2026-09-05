@@ -123,15 +123,25 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
   const refreshBrowserStatus = useCallback(async () => {
     try {
       const st = await api.browserStatus(activePlatform)
-      if ((st as { deferred?: boolean }).deferred) {
-        setBrowserMsg(st.message || '浏览器正用于提取，登录检测暂缓（不是掉登录）')
-        return
+      if (st.login_error && !st.login_running) {
+        setBrowserLoggedIn(false)
+        setBrowserMsg(st.login_error)
+        setNeedBrowserInstall(
+          /playwright|chromium|浏览器引擎|Executable doesn't exist|chrome/i.test(st.login_error),
+        )
+        return st
+      }
+      if (st.login_running || (st as { deferred?: boolean }).deferred) {
+        setBrowserMsg(st.message || (st.login_running ? '登录窗口打开中…' : '浏览器正用于提取，登录检测暂缓'))
+        return st
       }
       setBrowserLoggedIn(st.logged_in)
       setBrowserMsg(st.message)
+      return st
     } catch {
       setBrowserLoggedIn(null)
       setBrowserMsg('无法检测浏览器状态')
+      return null
     }
   }, [activePlatform])
 
@@ -432,16 +442,43 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
     try {
       const res = await api.browserLogin(browserForce, activePlatform)
       setBrowserMsg(res.message)
-      setBrowserForce(!res.ok)
+      // Next click can force-reopen if this attempt is already running / stuck.
+      setBrowserForce(!res.ok || !!res.login_running)
       const need =
         res.need_install === 'playwright' ||
         /playwright|chromium|浏览器引擎|Executable doesn't exist|chrome/i.test(res.message || '')
       setNeedBrowserInstall(!!need && !res.ok)
-      window.setTimeout(() => void refreshBrowserStatus(), 3000)
+      if (res.ok || res.login_running) {
+        // Poll until headed login finishes, then refresh cookie status.
+        const started = Date.now()
+        const poll = async () => {
+          const st = await refreshBrowserStatus()
+          if (!st) return
+          if (st.login_error) {
+            setBrowserForce(true)
+            setNeedBrowserInstall(
+              /playwright|chromium|浏览器引擎|Executable doesn't exist|chrome/i.test(st.login_error),
+            )
+            return
+          }
+          if (st.login_running) {
+            if (Date.now() - started < 10 * 60 * 1000) {
+              window.setTimeout(() => void poll(), 2000)
+            }
+            return
+          }
+          // Login thread ended — one more status read for cookies.
+          const finalSt = await refreshBrowserStatus()
+          if (finalSt?.logged_in) setBrowserForce(false)
+          else setBrowserForce(true)
+        }
+        window.setTimeout(() => void poll(), 1500)
+      }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       setBrowserMsg(msg)
       setNeedBrowserInstall(/playwright|chromium|浏览器引擎|Executable doesn't exist/i.test(msg))
+      setBrowserForce(true)
     } finally {
       setBusy('')
     }

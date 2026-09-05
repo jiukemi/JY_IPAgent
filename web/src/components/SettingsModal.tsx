@@ -578,6 +578,18 @@ export function SettingsModal({
 
           {tab === 'install' && (
             <>
+              {needsLocalEnv && (
+                <SettingsCard title="本机环境 · GPU 与模型" id="settings-env">
+                  <p className="text-xs text-[var(--muted)]">
+                    仅在步骤选择「本地」时显示。云端引擎不需要本机模型安装。
+                  </p>
+                  <ModelSetupPanel
+                    currentEngine={settings.tts_mode === 'local' ? settings.tts_engine : undefined}
+                    onRefresh={onSaved}
+                    defaultOpen={focusSection === 'env'}
+                  />
+                </SettingsCard>
+              )}
               <SettingsCard title="桌面运行时 · 一键修复" id="settings-runtime">
                 <p className="mb-2 text-xs text-[var(--muted)]">
                   启动异常时可清除运行时并重启；C 盘满可改运行时磁盘；「导出诊断包」可发给客服排查。
@@ -596,18 +608,6 @@ export function SettingsModal({
                 </p>
                 <QuarkAccelPanel />
               </SettingsCard>
-              {needsLocalEnv && (
-                <SettingsCard title="本机环境 · GPU 与模型" id="settings-env">
-                  <p className="text-xs text-[var(--muted)]">
-                    仅在步骤选择「本地」时显示。云端引擎不需要本机模型安装。
-                  </p>
-                  <ModelSetupPanel
-                    currentEngine={settings.tts_mode === 'local' ? settings.tts_engine : undefined}
-                    onRefresh={onSaved}
-                    defaultOpen={focusSection === 'env'}
-                  />
-                </SettingsCard>
-              )}
               {showWorkers && (
                 <SettingsCard title="常驻加速 · Worker" id="settings-workers">
                   <p className="text-xs text-[var(--muted)]">

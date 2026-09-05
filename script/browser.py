@@ -7,11 +7,12 @@ URL or selected explicitly. Each platform uses its own persistent user data dir
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 
 from script.platforms import PlatformConfig, detect_platform, get_platform
 
@@ -21,6 +22,10 @@ _login_lock = threading.Lock()
 _login_running = False
 _login_started_at: float = 0.0
 _login_platform: str = ""
+_login_last_error: str = ""
+_login_last_result: dict[str, Any] | None = None
+_login_cancel = threading.Event()
+_login_ctx_holder: list[Any] = []  # mutable box for live Playwright context
 _LOGIN_STALE_SECONDS = 600.0
 # Persistent profile is exclusive — while extract/CDN holds it, status checks must not
 # launch another Chrome or the UI falsely shows「登录掉了」.
@@ -52,7 +57,10 @@ def browser_cfg(cfg: dict) -> dict:
 
 
 def user_data_dir(cfg: dict, platform_id: str = "") -> Path:
-    """Return the persistent profile dir for the given platform."""
+    """Return the persistent profile dir for the given platform.
+
+    Packaged apps prefer AGENT_RUNTIME_DIR (writable) over install ROOT.
+    """
     if platform_id:
         p = get_platform(platform_id)
         subdir = p.user_data_subdir if p else f"data/browser/{platform_id}"
@@ -61,7 +69,8 @@ def user_data_dir(cfg: dict, platform_id: str = "") -> Path:
         subdir = raw
     path = Path(subdir)
     if not path.is_absolute():
-        path = ROOT / path
+        rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
+        path = (Path(rt) / path) if rt else (ROOT / path)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -189,16 +198,48 @@ def _detect_login_from_cookies(ctx, platform: PlatformConfig) -> tuple[bool, int
     return logged_in, len(cookies)
 
 
+def login_progress_snapshot(platform_id: str = "") -> dict:
+    """Non-destructive flags for UI polling (no browser launch)."""
+    with _login_lock:
+        running = _login_running
+        err = _login_last_error
+        result = dict(_login_last_result) if _login_last_result else None
+        plat = _login_platform or platform_id or "douyin"
+    out: dict[str, Any] = {
+        "login_running": running,
+        "login_error": err or "",
+        "login_platform": plat,
+    }
+    if result and not running:
+        out["login_result"] = result
+    return out
+
+
 def check_login_status(cfg: dict, platform_id: str = "") -> dict:
     """Best-effort: read saved cookies (prefer no navigation); optionally open homepage."""
     platform_id = platform_id or "douyin"
+    progress = login_progress_snapshot(platform_id)
+    # While headed login holds the profile, do not launch a second Chrome.
+    if progress.get("login_running") or (_profile_busy.locked() and _profile_busy_reason == "login"):
+        return {
+            "ready": True,
+            "logged_in": False,
+            "deferred": True,
+            "message": "登录窗口打开中，请在浏览器里完成登录后关闭窗口",
+            "profile_dir": str(user_data_dir(cfg, platform_id)),
+            "platform": platform_id,
+            "platform_name": (get_platform(platform_id).name if get_platform(platform_id) else platform_id),
+            "cookie_count": -1,
+            **progress,
+        }
     busy = profile_busy_status(platform_id)
     if busy:
         busy["profile_dir"] = str(user_data_dir(cfg, platform_id))
+        busy.update(progress)
         return busy
     platform = get_platform(platform_id)
     if not platform:
-        return {"ready": False, "logged_in": False, "message": f"未知平台: {platform_id}"}
+        return {"ready": False, "logged_in": False, "message": f"未知平台: {platform_id}", **progress}
     if not playwright_available():
         return {
             "ready": False,
@@ -207,6 +248,7 @@ def check_login_status(cfg: dict, platform_id: str = "") -> dict:
             "profile_dir": str(user_data_dir(cfg, platform_id)),
             "platform": platform_id,
             "platform_name": platform.name,
+            **progress,
         }
     try:
         with persistent_context(cfg, headless=True, platform_id=platform_id) as ctx:
@@ -221,6 +263,7 @@ def check_login_status(cfg: dict, platform_id: str = "") -> dict:
                     "platform": platform_id,
                     "platform_name": platform.name,
                     "cookie_count": n,
+                    **progress,
                 }
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
             try:
@@ -237,6 +280,7 @@ def check_login_status(cfg: dict, platform_id: str = "") -> dict:
                     "platform": platform_id,
                     "platform_name": platform.name,
                     "cookie_count": n,
+                    **progress,
                 }
             logged_in, n = _detect_login_from_cookies(ctx, platform)
             msg = "已检测到登录态" if logged_in else "未登录或登录已过期，请点击「浏览器登录」（需用本机 Chrome，勿开梯子）"
@@ -248,6 +292,7 @@ def check_login_status(cfg: dict, platform_id: str = "") -> dict:
                 "platform": platform_id,
                 "platform_name": platform.name,
                 "cookie_count": n,
+                **progress,
             }
     except Exception as exc:
         err = str(exc)
@@ -263,6 +308,7 @@ def check_login_status(cfg: dict, platform_id: str = "") -> dict:
                 "cookie_count": -1,
             }
             busy["profile_dir"] = str(user_data_dir(cfg, platform_id))
+            busy.update(progress)
             return busy
         if "Executable doesn't exist" in err or "chrome" in err.lower() and "channel" in err.lower():
             err = (
@@ -276,6 +322,7 @@ def check_login_status(cfg: dict, platform_id: str = "") -> dict:
             "profile_dir": str(user_data_dir(cfg, platform_id)),
             "platform": platform_id,
             "platform_name": platform.name,
+            **progress,
         }
 
 
@@ -332,6 +379,8 @@ def open_login_browser(cfg: dict, *, wait_close: bool = True, platform_id: str =
                 pass
 
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            _login_ctx_holder.clear()
+            _login_ctx_holder.append(ctx)
 
             def _check_empty(*_a, **_kw) -> None:
                 try:
@@ -384,6 +433,9 @@ def open_login_browser(cfg: dict, *, wait_close: bool = True, platform_id: str =
 
             if wait_close:
                 while not closed.is_set():
+                    if _login_cancel.is_set():
+                        closed.set()
+                        break
                     if closed.wait(timeout=1.5):
                         break
                     try:
@@ -409,6 +461,7 @@ def open_login_browser(cfg: dict, *, wait_close: bool = True, platform_id: str =
                 "cookie_count": cookie_count,
             }
     finally:
+        _login_ctx_holder.clear()
         _profile_busy_platform = ""
         _profile_busy_reason = ""
         _profile_busy.release()
@@ -419,29 +472,70 @@ def _is_login_stale() -> bool:
     return _login_started_at and (time.time() - _login_started_at) > _LOGIN_STALE_SECONDS
 
 
+def _request_cancel_login() -> None:
+    """Signal headed login to close and drop any held Playwright context."""
+    _login_cancel.set()
+    for ctx in list(_login_ctx_holder):
+        try:
+            ctx.close()
+        except Exception:
+            pass
+    _login_ctx_holder.clear()
+
+
 def start_login_async(cfg: dict, *, force: bool = False, platform_id: str = "") -> dict:
     """Non-blocking login window (background thread).
 
     `force=True` kills any stuck previous attempt and relaunches.
     """
-    global _login_running, _login_started_at, _login_platform
+    global _login_running, _login_started_at, _login_platform, _login_last_error, _login_last_result
     platform_id = platform_id or "douyin"
+    platform = get_platform(platform_id)
+
     with _login_lock:
         if _login_running and not force and not _is_login_stale():
             return {
                 "ok": False,
-                "message": "登录窗口已在打开中；如已关闭但点不动，再点一次本按钮会强制重开",
+                "message": "登录窗口已在打开中；如窗口未出现或已关掉，请再点「强制重开」",
+                "login_running": True,
             }
+        need_cancel = _login_running and (force or _is_login_stale())
+
+    if need_cancel:
+        _request_cancel_login()
+        # Wait for previous login thread to release the profile lock.
+        for _ in range(40):
+            with _login_lock:
+                still = _login_running
+            if not still and not _profile_busy.locked():
+                break
+            time.sleep(0.25)
+
+    with _login_lock:
         _login_running = True
         _login_started_at = time.time()
         _login_platform = platform_id
+        _login_last_error = ""
+        _login_last_result = None
+        _login_cancel.clear()
 
     def _run() -> None:
-        global _login_running
+        global _login_running, _login_last_error, _login_last_result
         try:
-            open_login_browser(cfg, wait_close=True, platform_id=platform_id)
-        except Exception:
-            pass
+            result = open_login_browser(cfg, wait_close=True, platform_id=platform_id)
+            with _login_lock:
+                _login_last_result = result
+                _login_last_error = ""
+        except Exception as exc:
+            err = str(exc)
+            with _login_lock:
+                _login_last_error = err
+                _login_last_result = {
+                    "ok": False,
+                    "logged_in": False,
+                    "message": err,
+                    "platform": platform_id,
+                }
         finally:
             with _login_lock:
                 _login_running = False
@@ -449,13 +543,16 @@ def start_login_async(cfg: dict, *, force: bool = False, platform_id: str = "") 
                 _login_platform = ""
 
     threading.Thread(target=_run, daemon=True).start()
-    platform = get_platform(platform_id)
     return {
         "ok": True,
-        "message": f"已打开{platform.name if platform else platform_id}浏览器，请在窗口中登录；完成后关闭浏览器窗口即可",
+        "message": (
+            f"正在打开{platform.name if platform else platform_id}浏览器，请在窗口中登录；"
+            "完成后关闭浏览器窗口，软件会自动刷新登录状态"
+        ),
         "profile_dir": str(user_data_dir(cfg, platform_id)),
         "platform": platform_id,
         "platform_name": platform.name if platform else platform_id,
+        "login_running": True,
     }
 
 

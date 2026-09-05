@@ -150,6 +150,8 @@ export const api = {
       playwright_installed?: boolean
       platform?: string
       platform_name?: string
+      login_running?: boolean
+      login_error?: string
     }>(`/api/browser/status${platform ? '?platform=' + platform : ''}`),
 
   browserLogin: (force?: boolean, platform?: string) =>
@@ -159,6 +161,7 @@ export const api = {
       profile_dir?: string
       platform_name?: string
       need_install?: string
+      login_running?: boolean
     }>('/api/browser/login', {
       method: 'POST',
       body: JSON.stringify({ force: !!force, platform: platform || '' }),
