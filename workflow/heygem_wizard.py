@@ -312,7 +312,11 @@ def wizard_status() -> dict[str, Any]:
         },
         "recommended_pack": recommended,
         "share_root_url": catalog.get("share_root_url") or "",
-        "share_extract_code": catalog.get("share_extract_code") or "",
+        "share_extract_code": (
+            (recommended or {}).get("share_extract_code")
+            or catalog.get("share_extract_code")
+            or ""
+        ),
         "portal_note": catalog.get("quark_portal_note") or catalog.get("portal_note") or "",
         "tars": tars,
         "image": image,

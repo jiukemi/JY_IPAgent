@@ -9,6 +9,7 @@ type Pack = {
   gpu_family: string
   approx_size_gb?: number
   share_url?: string
+  share_extract_code?: string
   zip_name?: string
   note?: string
   docker_image?: string
@@ -209,6 +210,7 @@ export function QuarkAccelPanel() {
                 className="mt-1 inline-block text-[10px] text-[var(--accent)] underline"
               >
                 夸克下载
+                {p.share_extract_code ? `（提取码 ${p.share_extract_code}）` : ''}
               </a>
             ) : (
               <p className="mt-1 text-[10px] text-amber-700/90">
@@ -238,6 +240,7 @@ export function QuarkAccelPanel() {
                 className="mt-1 inline-block text-[10px] text-[var(--accent)] underline"
               >
                 夸克下载
+                {p.share_extract_code ? `（提取码 ${p.share_extract_code}）` : ''}
               </a>
             ) : (
               <p className="mt-1 text-[10px] text-[var(--muted)]">分享链接未配置</p>

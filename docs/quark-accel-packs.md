@@ -35,10 +35,10 @@
 中间 tar（可再打包，不必进 Git）：`E:\agent-dist\guiji2025_duix.avatar.tar`、`…-5090.tar`。  
 `dist/` 默认 gitignore，勿把数 GB zip 推进公开仓库。  
 
-**当前镜像加速包（口播两 zip 同目录）**：  
-- 链接：`https://pan.quark.cn/s/61733feb5559`  
-- 提取码：`fcAT`  
-- 已写入 `data/quark/catalog.json` 的 `share_root_url` / 两包 `share_url` / `share_extract_code`
+**当前镜像加速包（口播两 zip 各自独立分享）**：  
+- 通用显卡：`https://pan.quark.cn/s/189d3ac515d1?pwd=47zj`（提取码 `47zj`）  
+- RTX50：`https://pan.quark.cn/s/e1fba3b2d463?pwd=kZhv`（提取码 `kZhv`）  
+- 已写入 `data/quark/catalog.json` 各包 `share_url` / `share_extract_code`
 
 ## 你本机如何打出待上传资源
 

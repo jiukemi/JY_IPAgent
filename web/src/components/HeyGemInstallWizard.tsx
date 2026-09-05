@@ -19,6 +19,7 @@ type WizardState = {
     id: string
     name: string
     share_url?: string
+    share_extract_code?: string
     zip_name?: string
     note?: string
     approx_size_gb?: number
@@ -325,10 +326,13 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
                       : ''}
                   </p>
                 )}
-                {wiz.share_extract_code ? (
+                {(pack?.share_extract_code || wiz.share_extract_code) ? (
                   <p className="text-[10px] text-[var(--muted)]">
-                    提取码：<span className="font-mono text-[var(--text)]">{wiz.share_extract_code}</span>
-                    （进文件夹后只下本机推荐的那个 zip）
+                    提取码：
+                    <span className="font-mono text-[var(--text)]">
+                      {pack?.share_extract_code || wiz.share_extract_code}
+                    </span>
+                    （只下载本机推荐的那个 zip）
                   </p>
                 ) : null}
                 {wiz.share_root_url && (
