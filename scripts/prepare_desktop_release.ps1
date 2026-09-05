@@ -8,6 +8,7 @@ Write-Host "==> build web"
 Push-Location (Join-Path $Root "web")
 if (-not (Test-Path "node_modules")) { npm install }
 npm run build
+if ($LASTEXITCODE -ne 0) { throw "web build failed" }
 Pop-Location
 
 if (Test-Path $Out) { Remove-Item -Recurse -Force $Out }

@@ -1161,6 +1161,13 @@ export const api = {
         default?: boolean
         label: string
       }>
+      local_docker_installers?: Array<{
+        path: string
+        name: string
+        label: string
+        size_gb?: number
+        bytes?: number
+      }>
       docker_install?: {
         phase?: string
         message?: string
