@@ -105,14 +105,21 @@ docker load -i data\runtime\heygem\duix.avatar-5090.tar
 
 软件只认 **`docker info` 成功**。个人使用一般 **不必注册 Docker Hub**；弹出 Sign in 可跳过。夸克包走本地 `docker load`，不依赖 Hub 登录。
 
-### Docker 装到非 C 盘（给用户：向导一键）
+### Docker 装到非 C 盘（给用户：本机安装包 + 向导选盘）
 
-**面向小白：不要让他们跑终端。** 应用内 **口播引擎安装向导** → 选盘 → **「一键安装到所选盘」**（下载安装包 + 弹 UAC，带 `--installation-dir` / `--wsl-default-data-root`）。
+**面向小白：不要依赖软件内「官网一键下载」**（国内 Docker CDN 经常 `retrieval incomplete`）。
+
+正确流程：
+1. 自行下载 `Docker Desktop Installer.exe`（浏览器 / 网盘 / 迅雷）
+2. 应用内向导 → **扫描本机安装包** 或粘贴路径
+3. **选盘** → **安装到所选盘**（弹 UAC，装到如 `D:\Docker\`）
 
 运维/脚本备用（仓库内）：
 
 ```powershell
-.\scripts\setup\install_docker_desktop_custom_drive.ps1 -Drive D: -Download
+.\scripts\setup\install_docker_desktop_custom_drive.ps1 -Drive D: -InstallerPath "D:\Downloads\Docker Desktop Installer.exe"
 ```
 
 已装在 C: 的需先卸载再在向导里重装到其它盘，或自行迁移 `docker-desktop-data`。
+
+（可选）若把官方 Installer 传到夸克，可再做成加速包，避免用户访问 Docker CDN。

@@ -99,25 +99,144 @@ def _installer_cache_path() -> Path:
     return base / "JY_IPAgent" / "DockerDesktopInstaller.exe"
 
 
+def _installer_looks_valid(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size >= 50_000_000
+    except OSError:
+        return False
+
+
+def find_local_docker_installers() -> list[dict[str, Any]]:
+    """Scan common folders for Docker Desktop Installer.exe (no network)."""
+    homes: list[Path] = []
+    user = Path.home()
+    for name in ("Downloads", "下载", "Desktop", "桌面"):
+        homes.append(user / name)
+    for env_key in ("USERPROFILE", "PUBLIC"):
+        base = os.environ.get(env_key)
+        if base:
+            homes.append(Path(base) / "Downloads")
+            homes.append(Path(base) / "下载")
+    homes.append(_installer_cache_path().parent)
+    # Also scan free drives' Downloads
+    for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+        homes.append(Path(f"{letter}:\\Downloads"))
+        homes.append(Path(f"{letter}:\\下载"))
+
+    seen: set[str] = set()
+    found: list[dict[str, Any]] = []
+    patterns = (
+        "Docker Desktop Installer.exe",
+        "DockerDesktopInstaller.exe",
+        "*Docker*Desktop*Installer*.exe",
+        "*docker*desktop*installer*.exe",
+    )
+    for folder in homes:
+        try:
+            if not folder.is_dir():
+                continue
+        except OSError:
+            continue
+        for pat in patterns:
+            try:
+                matches = list(folder.glob(pat))
+            except OSError:
+                continue
+            for p in matches:
+                try:
+                    key = str(p.resolve()).lower()
+                except OSError:
+                    key = str(p).lower()
+                if key in seen:
+                    continue
+                if not _installer_looks_valid(p):
+                    continue
+                seen.add(key)
+                size = p.stat().st_size
+                found.append(
+                    {
+                        "path": str(p),
+                        "name": p.name,
+                        "bytes": size,
+                        "size_gb": round(size / (1024**3), 2),
+                        "label": f"{p.name}（{round(size / (1024**3), 2)} GB · {p.parent}）",
+                    }
+                )
+    found.sort(key=lambda x: x["bytes"], reverse=True)
+    return found[:20]
+
+
 def _download_docker_installer(dest: Path) -> None:
+    """Resume-capable download; official CDN often fails in CN — prefer local file."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".partial")
-    if tmp.is_file():
-        tmp.unlink(missing_ok=True)
+    expected = 0
+    last_err: Exception | None = None
 
-    def _reporthook(block_num: int, block_size: int, total_size: int) -> None:
-        if total_size <= 0:
+    for attempt in range(1, 4):
+        existing = tmp.stat().st_size if tmp.is_file() else 0
+        headers = {"User-Agent": "JY_IPAgent/0.1"}
+        if existing > 0:
+            headers["Range"] = f"bytes={existing}-"
+        try:
+            req = urllib.request.Request(DOCKER_INSTALLER_URL, headers=headers)
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                cr = resp.headers.get("Content-Range") or ""
+                if "/" in cr:
+                    try:
+                        expected = int(cr.rsplit("/", 1)[-1])
+                    except ValueError:
+                        pass
+                elif resp.headers.get("Content-Length") and existing == 0:
+                    try:
+                        expected = int(resp.headers["Content-Length"])
+                    except ValueError:
+                        pass
+                # Server ignored Range → rewrite from scratch
+                mode = "ab" if existing > 0 and getattr(resp, "status", 200) == 206 else "wb"
+                if mode == "wb":
+                    existing = 0
+                written = existing
+                with open(tmp, mode) as out:
+                    while True:
+                        chunk = resp.read(1024 * 256)
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        written += len(chunk)
+                        if expected > 0:
+                            pct = int(min(99, written * 100 / expected))
+                            _set_docker_install(
+                                phase="downloading",
+                                progress_pct=pct,
+                                message=(
+                                    f"正在下载 Docker Desktop 安装包… {pct}% "
+                                    f"（第 {attempt}/3 次尝试）"
+                                ),
+                            )
+            if expected > 0 and written < int(expected * 0.98):
+                raise OSError(
+                    f"retrieval incomplete: got only {written} out of {expected} bytes"
+                )
+            if written < 50_000_000:
+                raise OSError(f"下载文件过小（{written} bytes），疑似被中断或拦截")
+            tmp.replace(dest)
             return
-        done = min(block_num * block_size, total_size)
-        pct = int(done * 100 / total_size)
-        _set_docker_install(
-            phase="downloading",
-            progress_pct=pct,
-            message=f"正在下载 Docker Desktop 安装包… {pct}%",
-        )
+        except Exception as exc:  # noqa: BLE001
+            last_err = exc
+            _set_docker_install(
+                phase="downloading",
+                progress_pct=0,
+                message=f"下载中断，正在重试（{attempt}/3）…",
+            )
+            time.sleep(1.5 * attempt)
 
-    urllib.request.urlretrieve(DOCKER_INSTALLER_URL, str(tmp), reporthook=_reporthook)
-    tmp.replace(dest)
+    raise RuntimeError(
+        "官网安装包下载失败（国内直连 Docker CDN 经常中断）。"
+        "请改用：浏览器/夸克/迅雷下好「Docker Desktop Installer.exe」后，"
+        "在向导里选择该文件或点「扫描本机安装包」，再「安装到所选盘」。"
+        f"原始错误：{last_err}"
+    )
 
 
 def _elevate_docker_installer(installer: Path, install_root: Path) -> None:
@@ -165,7 +284,12 @@ def _elevate_docker_installer(installer: Path, install_root: Path) -> None:
         )
 
 
-def _install_docker_worker(drive: str) -> None:
+def _install_docker_worker(
+    drive: str,
+    *,
+    installer_path: str | None = None,
+    allow_download: bool = False,
+) -> None:
     letter = drive.strip().upper().rstrip("\\")
     if len(letter) == 1:
         letter = f"{letter}:"
@@ -198,21 +322,59 @@ def _install_docker_worker(drive: str) -> None:
         drive=letter,
         install_root=str(install_root),
         progress_pct=0,
-        message="正在下载 Docker Desktop 安装包…",
+        message="正在准备 Docker Desktop 安装包…",
     )
     try:
-        installer = _installer_cache_path()
-        need_dl = True
-        if installer.is_file() and installer.stat().st_size > 50_000_000:
-            need_dl = False
+        installer: Path | None = None
+        if installer_path:
+            cand = Path(installer_path.strip().strip('"'))
+            if not _installer_looks_valid(cand):
+                _set_docker_install(
+                    phase="error",
+                    message=(
+                        f"安装包无效或不完整：{cand}。"
+                        "请确认是「Docker Desktop Installer.exe」（通常约 500MB+）。"
+                    ),
+                    progress_pct=0,
+                )
+                return
+            installer = cand
             _set_docker_install(
-                phase="downloading",
                 progress_pct=100,
-                message="已找到本机缓存的安装包，跳过下载。",
+                message=f"使用本机安装包：{installer.name}",
             )
-        if need_dl:
-            _download_docker_installer(installer)
+        else:
+            local = find_local_docker_installers()
+            if local:
+                installer = Path(local[0]["path"])
+                _set_docker_install(
+                    progress_pct=100,
+                    message=f"已自动找到本机安装包：{installer}",
+                )
+            elif _installer_looks_valid(_installer_cache_path()):
+                installer = _installer_cache_path()
+                _set_docker_install(
+                    progress_pct=100,
+                    message="使用本机缓存的安装包。",
+                )
+            elif allow_download:
+                installer = _installer_cache_path()
+                _set_docker_install(message="正在从官网下载安装包（国内常失败，不推荐）…")
+                _download_docker_installer(installer)
+            else:
+                _set_docker_install(
+                    phase="error",
+                    message=(
+                        "未找到本机 Docker Desktop 安装包。"
+                        "国内直连官网经常下到一半就断。"
+                        "请先用浏览器/网盘下载「Docker Desktop Installer.exe」到「下载」文件夹，"
+                        "再点「扫描本机安装包」或粘贴完整路径，然后「安装到所选盘」。"
+                    ),
+                    progress_pct=0,
+                )
+                return
 
+        assert installer is not None
         _set_docker_install(
             phase="elevating",
             progress_pct=100,
@@ -232,8 +394,13 @@ def _install_docker_worker(drive: str) -> None:
         _set_docker_install(phase="error", message=f"安装失败：{exc}", progress_pct=0)
 
 
-def start_docker_desktop_install(drive: str) -> dict[str, Any]:
-    """Download Docker Desktop installer and elevate install to the chosen drive."""
+def start_docker_desktop_install(
+    drive: str,
+    *,
+    installer_path: str | None = None,
+    allow_download: bool = False,
+) -> dict[str, Any]:
+    """Install Docker Desktop to the chosen drive from a local installer (preferred)."""
     if os.name != "nt":
         return {"ok": False, "message": "仅支持 Windows 上一键安装 Docker Desktop。"}
     with _DOCKER_INSTALL_LOCK:
@@ -248,27 +415,51 @@ def start_docker_desktop_install(drive: str) -> dict[str, Any]:
         (d["letter"] for d in list_install_drives() if d.get("default")),
         "D:",
     )
+    path = (installer_path or "").strip() or None
+    if path and not _installer_looks_valid(Path(path.strip('"'))) and not allow_download:
+        return {
+            "ok": False,
+            "message": (
+                f"安装包无效或不完整：{path}。"
+                "请选择完整的 Docker Desktop Installer.exe（约 500MB+）。"
+            ),
+            "docker_install": docker_install_progress(),
+            "local_installers": find_local_docker_installers(),
+        }
+
     _set_docker_install(
         phase="downloading",
         drive=letter,
-        message="已排队：准备下载并安装…",
+        message="已排队：准备安装…",
         progress_pct=0,
         install_root="",
     )
     threading.Thread(
         target=_install_docker_worker,
-        args=(letter,),
+        kwargs={
+            "drive": letter,
+            "installer_path": path,
+            "allow_download": allow_download,
+        },
         name="docker-desktop-install",
         daemon=True,
     ).start()
+    if allow_download and not path:
+        msg = (
+            f"已开始尝试官网下载并安装到 {letter}（国内网络常失败）。"
+            "更稳妥：先下好安装包，再选文件安装到所选盘。"
+        )
+    else:
+        msg = (
+            f"已开始安装到 {letter}：使用本机安装包，将弹出管理员确认。"
+            "请点「是」，装完后回向导「重新检测」。"
+        )
     return {
         "ok": True,
-        "message": (
-            f"已开始安装到 {letter}：先下载安装包，再弹出管理员确认。"
-            "请点「是」，装完后回向导「重新检测」。无需自己打开终端。"
-        ),
+        "message": msg,
         "drive": letter,
         "docker_install": docker_install_progress(),
+        "local_installers": find_local_docker_installers(),
     }
 
 
@@ -405,22 +596,29 @@ def docker_load_tar(tar_path: Path | None = None, *, family: str | None = None) 
 
 
 def open_docker_desktop_download() -> dict[str, Any]:
-    """Open Docker Desktop download page in the default browser (fallback)."""
-    url = DOCKER_PRODUCT_URL
+    """Open Docker Desktop installer URL in the default browser (user downloads themselves)."""
+    # Prefer direct installer link so browser download UI appears; product page often blocked in CN.
+    url = DOCKER_INSTALLER_URL
     try:
         webbrowser.open(url)
         opened = True
     except Exception:
         opened = False
+        try:
+            webbrowser.open(DOCKER_PRODUCT_URL)
+            opened = True
+        except Exception:
+            opened = False
     return {
         "ok": True,
         "opened": opened,
         "product_url": DOCKER_PRODUCT_URL,
         "installer_url": DOCKER_INSTALLER_URL,
         "message": (
-            "已打开官网下载页（备用）。官网图形安装默认装 C 盘。"
-            "推荐回到本向导：选磁盘 →「一键安装到所选盘」，由软件代装到 D:/E: 等盘，无需自己跑命令。"
-            "个人使用一般无需注册；登录窗可 Skip。验收：托盘就绪后点「重新检测」。"
+            "已尝试打开安装包下载链接。国内直连常失败或很慢，可用浏览器下载管理/网盘把 "
+            "「Docker Desktop Installer.exe」下到「下载」文件夹，"
+            "再回向导点「扫描本机安装包」→ 选盘 →「安装到所选盘」。"
+            "不要双击官网安装器装到默认 C 盘。"
         ),
     }
 
@@ -599,10 +797,13 @@ def wizard_status() -> dict[str, Any]:
         "docker_product_url": DOCKER_PRODUCT_URL,
         "docker_installer_url": DOCKER_INSTALLER_URL,
         "docker_acceptance_note": (
-            "验收：本机 docker info 成功即可（个人使用通常无需注册，登录窗可 Skip）。"
-            "请用下方「选盘 + 一键安装」——官网图形安装只会装 C 盘；本向导会把程序和镜像数据装到你选的盘。"
+            "验收：本机 docker info 成功即可（通常无需注册）。"
+            "国内直连官网安装包经常下到一半失败——"
+            "请先自行下好「Docker Desktop Installer.exe」，再选盘并点「安装到所选盘」。"
+            "软件只负责把已下载的安装包装到你选的盘（避开默认 C 盘）。"
         ),
         "install_drives": list_install_drives(),
+        "local_docker_installers": find_local_docker_installers(),
         "docker_install": docker_install_progress(),
         "general_pack_ops_note": general_ops_note,
         "can_load": bool(tars) and docker_ok,

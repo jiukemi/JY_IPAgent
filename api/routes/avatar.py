@@ -302,12 +302,35 @@ def heygem_wizard_open_docker() -> dict:
 
 @router.post("/heygem/wizard/install-docker")
 def heygem_wizard_install_docker(body: dict | None = None) -> dict:
-    """Download Docker Desktop and elevate-install onto the user-chosen drive (no terminal)."""
+    """Install Docker Desktop onto the user-chosen drive from a local installer (preferred)."""
     from workflow.heygem_wizard import start_docker_desktop_install
 
     body = body or {}
     drive = (body.get("drive") or "").strip()
-    return start_docker_desktop_install(drive)
+    installer_path = (body.get("installer_path") or body.get("path") or "").strip() or None
+    allow_download = bool(body.get("allow_download") or body.get("download"))
+    return start_docker_desktop_install(
+        drive,
+        installer_path=installer_path,
+        allow_download=allow_download,
+    )
+
+
+@router.post("/heygem/wizard/scan-docker-installer")
+def heygem_wizard_scan_docker_installer() -> dict:
+    """Rescan Downloads/Desktop for Docker Desktop Installer.exe."""
+    from workflow.heygem_wizard import find_local_docker_installers
+
+    found = find_local_docker_installers()
+    return {
+        "ok": True,
+        "local_installers": found,
+        "message": (
+            f"找到 {len(found)} 个安装包。"
+            if found
+            else "未找到。请把 Docker Desktop Installer.exe 放到「下载」文件夹后再扫。"
+        ),
+    }
 
 
 @router.post("/heygem/wizard/launch-docker")

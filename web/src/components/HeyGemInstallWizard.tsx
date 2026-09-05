@@ -43,6 +43,13 @@ type WizardState = {
     default?: boolean
     label: string
   }>
+  local_docker_installers?: Array<{
+    path: string
+    name: string
+    label: string
+    size_gb?: number
+    bytes?: number
+  }>
   docker_install?: {
     phase?: string
     message?: string
@@ -70,6 +77,10 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
   const [file, setFile] = useState<File | null>(null)
   const [open, setOpen] = useState(true)
   const [installDrive, setInstallDrive] = useState('')
+  const [installerPath, setInstallerPath] = useState('')
+  const [localInstallers, setLocalInstallers] = useState<
+    Array<{ path: string; name: string; label: string; size_gb?: number }>
+  >([])
   const [alert, setAlert] = useState<{
     title: string
     message: string
@@ -81,6 +92,10 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
       const s = await api.heygemWizard()
       setWiz(s)
       onReadyChange?.(!!s.heygem?.ready)
+      if (s.local_docker_installers) {
+        setLocalInstallers(s.local_docker_installers)
+        setInstallerPath((prev) => prev || s.local_docker_installers?.[0]?.path || '')
+      }
       setInstallDrive((prev) => {
         if (prev) return prev
         const def = s.install_drives?.find((d) => d.default)?.letter
@@ -107,14 +122,28 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
 
   const push = (line: string) => setLog((prev) => [...prev.slice(-50), line])
 
-  const installDockerToDrive = async () => {
+  const installDockerToDrive = async (allowDownload = false) => {
     if (!installDrive) {
       setAlert({ title: '请选择磁盘', message: '请先选择要把 Docker 装到哪一块盘。', variant: 'warning' })
       return
     }
+    if (!allowDownload && !installerPath.trim() && localInstallers.length === 0) {
+      setAlert({
+        title: '需要先有安装包',
+        message:
+          '国内直连官网经常下到一半失败。请先用浏览器/网盘下载「Docker Desktop Installer.exe」到下载文件夹，点「扫描本机安装包」，或粘贴完整路径后再安装。',
+        variant: 'warning',
+      })
+      return
+    }
     setBusy('安装 Docker')
     try {
-      const r = await api.heygemWizardInstallDocker({ drive: installDrive })
+      const r = await api.heygemWizardInstallDocker({
+        drive: installDrive,
+        installer_path: installerPath.trim() || undefined,
+        allow_download: allowDownload,
+      })
+      if (r.local_installers) setLocalInstallers(r.local_installers)
       push(r.message)
       setAlert({
         title: r.ok ? '正在安装 Docker' : '无法开始安装',
@@ -124,6 +153,26 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
       await refresh()
     } catch (e) {
       const { title, message } = parseApiError(e, '安装失败')
+      setAlert({ title, message, variant: 'error' })
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const scanInstaller = async () => {
+    setBusy('扫描安装包')
+    try {
+      const r = await api.heygemWizardScanDockerInstaller()
+      setLocalInstallers(r.local_installers || [])
+      if (r.local_installers?.[0]?.path) setInstallerPath(r.local_installers[0].path)
+      push(r.message)
+      setAlert({
+        title: r.local_installers?.length ? '已找到安装包' : '未找到安装包',
+        message: r.message,
+        variant: r.local_installers?.length ? 'success' : 'warning',
+      })
+    } catch (e) {
+      const { title, message } = parseApiError(e, '扫描失败')
       setAlert({ title, message, variant: 'error' })
     } finally {
       setBusy('')
@@ -327,8 +376,64 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
                 <p className="text-[11px] font-medium text-[var(--text)]">② Docker Desktop</p>
                 <p className="text-[10px] leading-relaxed text-[var(--muted)]">
                   {wiz.docker_acceptance_note ||
-                    '验收：docker info 成功即可（通常无需注册）。请用下方选盘一键安装——官网图形安装只会装 C 盘。'}
+                    '国内直连官网安装包常失败。请先下好 Installer.exe，再选盘安装到 D:/E:（避免默认 C 盘）。验收：docker info 成功即可。'}
                 </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={!!busy || dockerInstalling}
+                    onClick={() => void openDocker()}
+                    className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--panel)] disabled:opacity-40"
+                  >
+                    打开下载页（自行下载安装包）
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!!busy || dockerInstalling}
+                    onClick={() => void scanInstaller()}
+                    className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--panel)] disabled:opacity-40"
+                  >
+                    扫描本机安装包
+                  </button>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] text-[var(--muted)]" htmlFor="docker-installer-path">
+                    安装包路径（Docker Desktop Installer.exe）
+                  </label>
+                  {localInstallers.length > 0 ? (
+                    <select
+                      id="docker-installer-path"
+                      value={installerPath}
+                      disabled={!!busy || dockerInstalling}
+                      onChange={(e) => setInstallerPath(e.target.value)}
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-xs text-[var(--text)] disabled:opacity-40"
+                    >
+                      {localInstallers.map((f) => (
+                        <option key={f.path} value={f.path}>
+                          {f.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      id="docker-installer-path"
+                      value={installerPath}
+                      disabled={!!busy || dockerInstalling}
+                      onChange={(e) => setInstallerPath(e.target.value)}
+                      placeholder="例如 D:\Downloads\Docker Desktop Installer.exe"
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-xs text-[var(--text)] disabled:opacity-40"
+                    />
+                  )}
+                  {localInstallers.length > 0 && (
+                    <input
+                      value={installerPath}
+                      disabled={!!busy || dockerInstalling}
+                      onChange={(e) => setInstallerPath(e.target.value)}
+                      className="w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-[10px] text-[var(--muted)] disabled:opacity-40"
+                      title="也可手动改路径"
+                    />
+                  )}
+                </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <label className="text-[10px] text-[var(--muted)]" htmlFor="docker-install-drive">
                     安装到
@@ -351,10 +456,10 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
                   <button
                     type="button"
                     disabled={!!busy || dockerInstalling || !installDrive}
-                    onClick={() => void installDockerToDrive()}
+                    onClick={() => void installDockerToDrive(false)}
                     className="btn-primary rounded-lg px-3 py-1.5 text-xs font-semibold disabled:opacity-40"
                   >
-                    {dockerInstalling ? '安装进行中…' : '一键安装到所选盘'}
+                    {dockerInstalling ? '安装进行中…' : '安装到所选盘'}
                   </button>
                 </div>
                 {(wiz.docker_install?.message || dockerInstalling) && (
@@ -386,10 +491,10 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
                   <button
                     type="button"
                     disabled={!!busy || dockerInstalling}
-                    onClick={() => void openDocker()}
+                    onClick={() => void installDockerToDrive(true)}
                     className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-[10px] text-[var(--muted)] hover:bg-[var(--panel)] disabled:opacity-40"
                   >
-                    备用：打开官网（默认 C 盘）
+                    备用：尝试官网下载（国内常失败）
                   </button>
                 </div>
               </div>

@@ -1185,11 +1185,16 @@ export const api = {
       message: string
     }>('/api/avatar/heygem/wizard/open-docker', { method: 'POST' }),
 
-  heygemWizardInstallDocker: (opts: { drive: string }) =>
+  heygemWizardInstallDocker: (opts: {
+    drive: string
+    installer_path?: string
+    allow_download?: boolean
+  }) =>
     request<{
       ok: boolean
       message: string
       drive?: string
+      local_installers?: Array<{ path: string; name: string; label: string; size_gb?: number }>
       docker_install?: {
         phase?: string
         message?: string
@@ -1201,6 +1206,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(opts),
     }),
+
+  heygemWizardScanDockerInstaller: () =>
+    request<{
+      ok: boolean
+      message: string
+      local_installers: Array<{ path: string; name: string; label: string; size_gb?: number }>
+    }>('/api/avatar/heygem/wizard/scan-docker-installer', { method: 'POST' }),
 
   heygemWizardLaunchDocker: () =>
     request<{ ok: boolean; message: string; path?: string; need_install?: boolean }>(
