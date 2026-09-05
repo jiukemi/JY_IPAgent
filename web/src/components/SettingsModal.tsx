@@ -580,7 +580,7 @@ export function SettingsModal({
             <>
               <SettingsCard title="桌面运行时 · 一键修复" id="settings-runtime">
                 <p className="mb-2 text-xs text-[var(--muted)]">
-                  启动异常、依赖损坏时，可检测并一键清除运行时后自动重启（无需手动删文件夹）。
+                  启动异常时可清除运行时并重启；C 盘满可改运行时磁盘；「导出诊断包」可发给客服排查。
                 </p>
                 <DesktopRuntimePanel />
               </SettingsCard>

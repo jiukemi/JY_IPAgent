@@ -2,12 +2,14 @@
  * Agent desktop shell: spawn FastAPI (server.py), open BrowserWindow.
  * Engines are NOT bundled — download later via 本机环境 / components.
  *
- * Packaged runtime (Python/FFmpeg) lives under userData — NOT under Program Files —
- * so first-run download works without admin write permission.
+ * Packaged runtime (Python/FFmpeg) prefers the install drive (e.g. D:\\JY_IPAgent-Data\\runtime),
+ * with a tiny pointer under userData. Falls back to %APPDATA% if that drive is unwritable.
+ * Existing AppData runtimes are kept (no silent migrate) to avoid disrupting current users.
  */
 import { app, BrowserWindow, shell, dialog, Menu, ipcMain, clipboard, protocol, net } from 'electron'
 import { execSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import http from 'node:http'
@@ -64,12 +66,162 @@ function edition() {
   return e === 'light' ? 'light' : 'full'
 }
 
-/** Writable dir for portable Python + FFmpeg */
-function runtimeDir() {
-  if (app.isPackaged) {
-    return path.join(app.getPath('userData'), 'runtime')
+/** @type {string | null} */
+let runtimeDirCache = null
+
+function legacyUserDataRuntime() {
+  return path.join(app.getPath('userData'), 'runtime')
+}
+
+function runtimePointerPath() {
+  return path.join(app.getPath('userData'), 'runtime-root.json')
+}
+
+function installDriveRoot() {
+  try {
+    const exe = app.isPackaged ? process.execPath : ROOT
+    return path.parse(path.resolve(exe)).root
+  } catch {
+    return process.platform === 'win32' ? 'C:\\' : '/'
   }
-  return path.join(ROOT, 'data', 'runtime')
+}
+
+function runtimeOnDrive(driveRoot) {
+  const root = String(driveRoot || '').trim() || installDriveRoot()
+  // D:\JY_IPAgent-Data\runtime — outside Program Files, no admin needed
+  return path.join(root, 'JY_IPAgent-Data', 'runtime')
+}
+
+function readRuntimePointer() {
+  try {
+    const p = runtimePointerPath()
+    if (!fs.existsSync(p)) return null
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'))
+    const root = typeof j?.root === 'string' ? j.root.trim() : ''
+    if (!root) return null
+    return { root: path.resolve(root), source: String(j.source || 'custom') }
+  } catch {
+    return null
+  }
+}
+
+function writeRuntimePointer(root, source = 'custom') {
+  const resolved = path.resolve(root)
+  fs.mkdirSync(app.getPath('userData'), { recursive: true })
+  fs.writeFileSync(
+    runtimePointerPath(),
+    JSON.stringify({ root: resolved, source, updatedAt: new Date().toISOString() }, null, 2),
+    'utf8',
+  )
+  runtimeDirCache = null
+  return resolved
+}
+
+function dirIsWritable(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true })
+    const probe = path.join(dir, `.write_probe_${process.pid}`)
+    fs.writeFileSync(probe, 'ok')
+    fs.unlinkSync(probe)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function legacyRuntimeLooksUsed(dir) {
+  return (
+    fs.existsSync(path.join(dir, 'venv')) ||
+    fs.existsSync(path.join(dir, 'python', 'python.exe')) ||
+    fs.existsSync(path.join(dir, 'python.json'))
+  )
+}
+
+function freeBytesForPath(anyPath) {
+  if (process.platform !== 'win32') return null
+  try {
+    const drive = path.parse(path.resolve(anyPath)).root.replace(/\\/g, '').replace(':', '')
+    if (!drive) return null
+    const out = execSync(
+      `powershell -NoProfile -Command "(Get-PSDrive -Name ${JSON.stringify(drive)}).Free"`,
+      { windowsHide: true, timeout: 8000, encoding: 'utf8' },
+    )
+    const n = Number(String(out).trim())
+    return Number.isFinite(n) ? n : null
+  } catch {
+    return null
+  }
+}
+
+function listFixedDrives() {
+  if (process.platform !== 'win32') {
+    return [{ letter: '/', root: '/', freeBytes: null, label: '/' }]
+  }
+  try {
+    const script =
+      "Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Used -ne $null } | ForEach-Object { Write-Output (($_.Name) + '|' + ($_.Root) + '|' + ($_.Free)) }"
+    const out = execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command ${JSON.stringify(script)}`, {
+      windowsHide: true,
+      timeout: 12000,
+      encoding: 'utf8',
+    })
+    const drives = String(out)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [name, root, free] = line.split('|')
+        if (!name) return null
+        return {
+          letter: `${name}:`,
+          root: root || `${name}:\\`,
+          freeBytes: Number(free) || 0,
+          label: `${name}:`,
+        }
+      })
+      .filter(Boolean)
+    return drives.length ? drives : [{ letter: 'C:', root: 'C:\\', freeBytes: null, label: 'C:' }]
+  } catch {
+    return [{ letter: 'C:', root: 'C:\\', freeBytes: null, label: 'C:' }]
+  }
+}
+
+/**
+ * Writable dir for portable Python + FFmpeg.
+ * Priority (packaged): pointer → existing AppData runtime → install-drive Data folder → AppData.
+ */
+function resolveRuntimeDir() {
+  if (!app.isPackaged) {
+    return path.join(ROOT, 'data', 'runtime')
+  }
+  const pointer = readRuntimePointer()
+  if (pointer?.root && dirIsWritable(pointer.root)) {
+    return pointer.root
+  }
+  const legacy = legacyUserDataRuntime()
+  if (legacyRuntimeLooksUsed(legacy)) {
+    return legacy
+  }
+  const onInstall = runtimeOnDrive(installDriveRoot())
+  if (dirIsWritable(onInstall)) {
+    try {
+      writeRuntimePointer(onInstall, 'install-drive')
+    } catch {
+      /* ignore */
+    }
+    return onInstall
+  }
+  return legacy
+}
+
+function runtimeDir() {
+  if (runtimeDirCache) return runtimeDirCache
+  runtimeDirCache = resolveRuntimeDir()
+  return runtimeDirCache
+}
+
+function invalidateRuntimeDirCache() {
+  runtimeDirCache = null
 }
 
 function portablePythonExe() {
@@ -242,6 +394,8 @@ function inspectRuntime(opts = {}) {
   const withSize = opts.withSize === true
   const dir = runtimeDir()
   const exists = fs.existsSync(dir)
+  const pointer = readRuntimePointer()
+  const installRoot = installDriveRoot()
   const info = {
     path: dir,
     exists,
@@ -251,6 +405,11 @@ function inspectRuntime(opts = {}) {
     hasLog: false,
     hasConfig: false,
     hasPythonMeta: false,
+    source: pointer?.source || (dir === legacyUserDataRuntime() ? 'userdata' : 'install-drive'),
+    installDrive: installRoot,
+    preferredOnInstallDrive: runtimeOnDrive(installRoot),
+    freeBytes: freeBytesForPath(dir),
+    pointerPath: runtimePointerPath(),
   }
   if (!exists) return info
   info.hasVenv = fs.existsSync(path.join(dir, 'venv'))
@@ -371,6 +530,7 @@ function killBootstrapProc() {
 function clearRuntimeDir() {
   killBootstrapProc()
   killBackend()
+  invalidateRuntimeDirCache()
   const dir = runtimeDir()
   if (!fs.existsSync(dir)) {
     return { ok: true, path: dir, cleared: false, message: '运行时目录不存在，无需清理' }
@@ -402,6 +562,213 @@ function clearRuntimeDir() {
 function relaunchApp() {
   app.relaunch()
   app.exit(0)
+}
+
+function sanitizeConfigYaml(raw) {
+  return String(raw || '')
+    .split(/\r?\n/)
+    .map((line) => {
+      if (/^\s*(api[_-]?key|token|secret|password|access[_-]?key|secret[_-]?key)\s*:/i.test(line)) {
+        const i = line.indexOf(':')
+        return `${line.slice(0, i + 1)} "***"`
+      }
+      return line
+    })
+    .join('\n')
+}
+
+function readAppVersionSafe() {
+  try {
+    return app.getVersion()
+  } catch {
+    /* ignore */
+  }
+  try {
+    const v = fs.readFileSync(path.join(ROOT, 'VERSION'), 'utf8').trim()
+    if (v) return v
+  } catch {
+    /* ignore */
+  }
+  return 'unknown'
+}
+
+function collectDiagMeta() {
+  const rt = runtimeDir()
+  const drives = listFixedDrives()
+  return {
+    exportedAt: new Date().toISOString(),
+    appVersion: readAppVersionSafe(),
+    packaged: app.isPackaged,
+    platform: process.platform,
+    arch: process.arch,
+    electron: process.versions?.electron,
+    node: process.versions?.node,
+    execPath: process.execPath,
+    resourcesPath: process.resourcesPath || '',
+    root: ROOT,
+    userData: app.getPath('userData'),
+    runtime: inspectRuntime({ withSize: true }),
+    runtimePointer: readRuntimePointer(),
+    installDrive: installDriveRoot(),
+    drives,
+    envHints: {
+      AGENT_RUNTIME_DIR: process.env.AGENT_RUNTIME_DIR || '',
+      HTTP_PROXY: process.env.HTTP_PROXY || '',
+      HTTPS_PROXY: process.env.HTTPS_PROXY || '',
+    },
+  }
+}
+
+/** Build a zip users can send for support. */
+async function exportDiagnosticsZip() {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  const tmpRoot = path.join(os.tmpdir(), `jy-diag-${process.pid}-${Date.now()}`)
+  const folder = path.join(tmpRoot, `JY_IPAgent-diag-${stamp}`)
+  fs.mkdirSync(folder, { recursive: true })
+
+  const meta = collectDiagMeta()
+  fs.writeFileSync(path.join(folder, 'meta.json'), JSON.stringify(meta, null, 2), 'utf8')
+  fs.writeFileSync(
+    path.join(folder, 'README.txt'),
+    [
+      '九易AI智能体 · 诊断包',
+      `导出时间: ${meta.exportedAt}`,
+      `版本: ${meta.appVersion}`,
+      `运行时: ${meta.runtime?.path || ''}`,
+      '',
+      '请把本 zip 发给客服/开发者（已尽量去掉 API Key）。',
+      '',
+    ].join('\n'),
+    'utf8',
+  )
+
+  const copies = [
+    [path.join(runtimeDir(), 'bootstrap.log'), 'bootstrap.log'],
+    [path.join(runtimeDir(), 'python.json'), 'python.json'],
+    [path.join(ROOT, 'VERSION'), 'VERSION'],
+    [runtimePointerPath(), 'runtime-root.json'],
+  ]
+  for (const [src, name] of copies) {
+    try {
+      if (fs.existsSync(src)) fs.copyFileSync(src, path.join(folder, name))
+    } catch {
+      /* ignore */
+    }
+  }
+  for (const cfg of [path.join(runtimeDir(), 'config.yaml'), path.join(ROOT, 'config.yaml')]) {
+    try {
+      if (!fs.existsSync(cfg)) continue
+      const raw = fs.readFileSync(cfg, 'utf8')
+      fs.writeFileSync(path.join(folder, 'config.sanitized.yaml'), sanitizeConfigYaml(raw), 'utf8')
+      break
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Port probe snapshot
+  const portLines = []
+  for (let port = 7860; port <= 7890; port++) {
+    try {
+      const ok = await new Promise((resolve) => {
+        const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
+          res.resume()
+          resolve(res.statusCode === 200)
+        })
+        req.on('error', () => resolve(false))
+        req.setTimeout(600, () => {
+          req.destroy()
+          resolve(false)
+        })
+      })
+      if (ok) portLines.push(`${port}=healthy`)
+    } catch {
+      /* ignore */
+    }
+  }
+  fs.writeFileSync(
+    path.join(folder, 'ports.txt'),
+    portLines.length ? portLines.join('\n') : 'no healthy port in 7860-7890',
+    'utf8',
+  )
+
+  const defaultName = `JY_IPAgent-diag-${stamp}.zip`
+  const save = await dialog.showSaveDialog({
+    title: '导出诊断包',
+    defaultPath: path.join(app.getPath('downloads'), defaultName),
+    filters: [{ name: 'Zip', extensions: ['zip'] }],
+  })
+  if (save.canceled || !save.filePath) {
+    try {
+      fs.rmSync(tmpRoot, { recursive: true, force: true })
+    } catch {
+      /* ignore */
+    }
+    return { ok: false, cancelled: true, message: '已取消' }
+  }
+  const zipPath = save.filePath.endsWith('.zip') ? save.filePath : `${save.filePath}.zip`
+  try {
+    if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath)
+  } catch {
+    /* ignore */
+  }
+
+  // Compress-Archive needs the folder contents; use -Path folder\*
+  try {
+    const ps = `Compress-Archive -Path ${JSON.stringify(folder + path.sep + '*')} -DestinationPath ${JSON.stringify(zipPath)} -Force`
+    execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command ${JSON.stringify(ps)}`, {
+      windowsHide: true,
+      timeout: 120000,
+    })
+  } catch (e) {
+    try {
+      fs.rmSync(tmpRoot, { recursive: true, force: true })
+    } catch {
+      /* ignore */
+    }
+    return {
+      ok: false,
+      message: `压缩失败：${e instanceof Error ? e.message : e}`,
+    }
+  }
+  try {
+    fs.rmSync(tmpRoot, { recursive: true, force: true })
+  } catch {
+    /* ignore */
+  }
+  try {
+    shell.showItemInFolder(zipPath)
+  } catch {
+    /* ignore */
+  }
+  return { ok: true, path: zipPath, message: `已导出：${zipPath}` }
+}
+
+function setRuntimeDrive(driveLetter) {
+  const raw = String(driveLetter || '').trim().toUpperCase()
+  let root
+  if (!raw || raw === 'APPDATA' || raw === 'USERDATA') {
+    root = legacyUserDataRuntime()
+    writeRuntimePointer(root, 'userdata')
+  } else {
+    const letter = raw.replace(/[^A-Z]/g, '').slice(0, 1)
+    if (!letter) return { ok: false, message: '无效磁盘盘符' }
+    root = runtimeOnDrive(`${letter}:\\`)
+    if (!dirIsWritable(root)) {
+      return {
+        ok: false,
+        message: `无法在 ${letter}: 写入 ${root}（权限或磁盘满）。请换盘或清理空间。`,
+      }
+    }
+    writeRuntimePointer(root, 'custom')
+  }
+  invalidateRuntimeDirCache()
+  return {
+    ok: true,
+    path: root,
+    message: `运行时将使用：${root}\n下次启动（或清除运行时后）会在该目录准备环境。`,
+    relaunchSuggested: true,
+  }
 }
 
 function registerSplashIpc() {
@@ -581,6 +948,7 @@ function registerSplashIpc() {
     setTimeout(() => relaunchApp(), 400)
     return { ...result, relaunching: true }
   })
+  ipcMain.handle('boot:export-diag', () => exportDiagnosticsZip())
   // Main window (settings) uses the same handlers under desktop:* aliases
   ipcMain.handle('desktop:runtime-info', (_e, opts) =>
     inspectRuntime({ withSize: opts?.withSize !== false }),
@@ -589,6 +957,22 @@ function registerSplashIpc() {
     const result = clearRuntimeDir()
     if (!result.ok) return result
     setTimeout(() => relaunchApp(), 400)
+    return { ...result, relaunching: true }
+  })
+  ipcMain.handle('desktop:export-diag', () => exportDiagnosticsZip())
+  ipcMain.handle('desktop:list-drives', () => ({
+    drives: listFixedDrives(),
+    current: inspectRuntime({ withSize: false }),
+    installDrive: installDriveRoot(),
+  }))
+  ipcMain.handle('desktop:set-runtime-drive', (_e, driveLetter) => {
+    const result = setRuntimeDrive(driveLetter)
+    return result
+  })
+  ipcMain.handle('desktop:set-runtime-drive-and-relaunch', (_e, driveLetter) => {
+    const result = setRuntimeDrive(driveLetter)
+    if (!result.ok) return result
+    setTimeout(() => relaunchApp(), 500)
     return { ...result, relaunching: true }
   })
   ipcMain.handle('desktop:app-version', () => {

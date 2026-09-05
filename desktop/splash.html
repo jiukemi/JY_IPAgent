@@ -396,6 +396,7 @@
       <div class="help-bar" id="helpBar">
         <button class="primary" id="btnClearLive">清除运行时并重试</button>
         <button id="btnLogLive">打开日志</button>
+        <button id="btnDiagLive">导出诊断包</button>
         <button id="btnQuitLive">退出</button>
       </div>
 
@@ -424,6 +425,7 @@
           <button id="btnDownloads">打开下载文件夹</button>
           <button id="btnCopy">复制错误信息</button>
           <button id="btnLog">打开日志目录</button>
+          <button id="btnDiag">导出诊断包</button>
           <button id="btnQuit">退出</button>
           <span id="copyHint">已复制</span>
         </div>
@@ -770,10 +772,34 @@
           setTimeout(() => hint.classList.remove('show'), 1600)
         }
       }
+      async function exportDiagClicked() {
+        subtitle.textContent = '正在导出诊断包…'
+        try {
+          const res = await window.bootSplash?.exportDiagnostics?.()
+          if (res?.cancelled) {
+            subtitle.textContent = '已取消导出'
+            return
+          }
+          if (res?.ok && res.path) {
+            appendLog('==> 诊断包: ' + res.path)
+            subtitle.textContent = '诊断包已导出，请发给客服'
+            setMarquee(res.path)
+          } else {
+            subtitle.textContent = res?.message || '导出失败'
+            appendLog('!! ' + (res?.message || 'export diag failed'))
+          }
+        } catch (e) {
+          subtitle.textContent = '导出失败'
+          appendLog('!! ' + String(e))
+        }
+      }
+
       document.getElementById('btnLog').onclick = () => void openLogClicked()
       document.getElementById('btnQuit').onclick = () => window.bootSplash?.quit()
       document.getElementById('btnLogLive').onclick = () => void openLogClicked()
       document.getElementById('btnQuitLive').onclick = () => window.bootSplash?.quit()
+      document.getElementById('btnDiag')?.addEventListener('click', () => void exportDiagClicked())
+      document.getElementById('btnDiagLive')?.addEventListener('click', () => void exportDiagClicked())
       btnClear.onclick = () => doClearAndRetry(btnClear)
       btnClearLive.onclick = () => doClearAndRetry(btnClearLive)
 

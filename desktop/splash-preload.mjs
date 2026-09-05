@@ -24,6 +24,7 @@ const api = {
   quarkInstall: () => ipcRenderer.invoke('boot:quark-install'),
   runtimeInfo: () => ipcRenderer.invoke('boot:runtime-info'),
   clearAndRetry: () => ipcRenderer.invoke('boot:clear-and-retry'),
+  exportDiagnostics: () => ipcRenderer.invoke('boot:export-diag'),
 }
 
 contextBridge.exposeInMainWorld('bootSplash', api)
