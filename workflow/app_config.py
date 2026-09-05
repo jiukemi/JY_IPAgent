@@ -3,10 +3,26 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from pathlib import Path
 
 import yaml
+
+# Double-quoted Windows paths like "D:\JY_..." break YAML (\J is not a valid escape).
+_WIN_DQ_PATH = re.compile(
+    r'(?m)^(?P<prefix>\s*[\w./-]+:\s*)"(?P<path>[A-Za-z]:\\[^"\r\n]*)"'
+)
+
+
+def repair_yaml_windows_path_quotes(text: str) -> str:
+    """Rewrite double-quoted drive paths to use forward slashes (YAML-safe)."""
+
+    def _sub(m: re.Match[str]) -> str:
+        fixed = m.group("path").replace("\\", "/")
+        return f'{m.group("prefix")}"{fixed}"'
+
+    return _WIN_DQ_PATH.sub(_sub, text)
 
 
 def _resolve_config_path() -> Path:
@@ -63,5 +79,16 @@ def load_cfg() -> dict:
     ensure_config_file()
     from workflow.bundle_paths import normalize_config_paths, project_root
 
-    cfg = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    raw = CONFIG_PATH.read_text(encoding="utf-8")
+    try:
+        cfg = yaml.safe_load(raw) or {}
+    except yaml.YAMLError:
+        fixed = repair_yaml_windows_path_quotes(raw)
+        if fixed == raw:
+            raise
+        cfg = yaml.safe_load(fixed) or {}
+        try:
+            CONFIG_PATH.write_text(fixed, encoding="utf-8")
+        except OSError:
+            pass
     return normalize_config_paths(cfg, project_root())

@@ -314,19 +314,51 @@ if (Test-Path $venvPy) {
 }
 
 # Point config at the real install dir (runtime config for packaged; project config for dev)
+# YAML double-quoted strings treat \ as escape — never write "D:\path" raw.
 function Update-IndexTtsConfigPath([string]$CfgPath, [string]$Dir) {
     if (-not (Test-Path $CfgPath)) { return $false }
+    # Prefer forward slashes (Pathlib-safe on Windows, YAML-safe).
+    $DirYaml = ($Dir -replace '\\', '/')
     try {
-        $raw = Get-Content $CfgPath -Raw -Encoding UTF8
-        if ($raw -match '(?m)^(\s*indextts_dir:\s*).*$') {
-            $raw = [regex]::Replace($raw, '(?m)^(\s*indextts_dir:\s*).*$', "`$1`"$Dir`"")
-        } elseif ($raw -match '(?m)^paths:\s*$') {
-            $raw = $raw -replace '(?m)^(paths:\s*\r?\n)', "`$1  indextts_dir: `"$Dir`"`r`n"
-        } else {
-            $raw = $raw.TrimEnd() + "`r`npaths:`r`n  indextts_dir: `"$Dir`"`r`n"
+        $rtPy = $null
+        if ($env:AGENT_RUNTIME_DIR) {
+            $cand = Join-Path $env:AGENT_RUNTIME_DIR "venv\Scripts\python.exe"
+            if (Test-Path $cand) { $rtPy = $cand }
         }
-        Set-Content -Path $CfgPath -Value $raw -Encoding UTF8
-        Write-Host "==> updated $CfgPath -> paths.indextts_dir=$Dir"
+        if ($rtPy) {
+            $pyFile = Join-Path (Split-Path $CfgPath) "_patch_indextts_path.py"
+            $env:AGENT_PATCH_CFG = $CfgPath
+            $env:AGENT_PATCH_DIR = $DirYaml
+            @(
+                "import os"
+                "from pathlib import Path"
+                "import yaml"
+                "p = Path(os.environ['AGENT_PATCH_CFG'])"
+                "d = yaml.safe_load(p.read_text(encoding='utf-8')) or {}"
+                "d.setdefault('paths', {})['indextts_dir'] = os.environ['AGENT_PATCH_DIR']"
+                "p.write_text(yaml.safe_dump(d, allow_unicode=True, sort_keys=False), encoding='utf-8')"
+                "print('ok')"
+            ) | Set-Content -Path $pyFile -Encoding UTF8
+            try {
+                & $rtPy $pyFile
+                if ($LASTEXITCODE -ne 0) { throw "python patch exit=$LASTEXITCODE" }
+            } finally {
+                Remove-Item $pyFile -Force -ErrorAction SilentlyContinue
+                Remove-Item Env:AGENT_PATCH_CFG -ErrorAction SilentlyContinue
+                Remove-Item Env:AGENT_PATCH_DIR -ErrorAction SilentlyContinue
+            }
+        } else {
+            $raw = Get-Content $CfgPath -Raw -Encoding UTF8
+            if ($raw -match '(?m)^(\s*indextts_dir:\s*).*$') {
+                $raw = [regex]::Replace($raw, '(?m)^(\s*indextts_dir:\s*).*$', "`$1'$DirYaml'")
+            } elseif ($raw -match '(?m)^paths:\s*$') {
+                $raw = $raw -replace '(?m)^(paths:\s*\r?\n)', "`$1  indextts_dir: '$DirYaml'`r`n"
+            } else {
+                $raw = $raw.TrimEnd() + "`r`npaths:`r`n  indextts_dir: '$DirYaml'`r`n"
+            }
+            Set-Content -Path $CfgPath -Value $raw -Encoding UTF8
+        }
+        Write-Host "==> updated $CfgPath -> paths.indextts_dir=$DirYaml"
         return $true
     } catch {
         Write-Host "!! config update skipped: $($_.Exception.Message)"
