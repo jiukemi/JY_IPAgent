@@ -42,6 +42,14 @@ def load_presets() -> dict:
 
 def venv_python(cfg: dict, key: str) -> str:
     root = Path(cfg["paths"][key])
+    if key == "cosyvoice_dir":
+        try:
+            from workflow.engine_status import _resolve_cosyvoice_install
+
+            root = _resolve_cosyvoice_install(cfg)
+        except Exception:
+            if not root.is_absolute():
+                root = Path(root)
     # uv / modern installs use .venv; legacy scripts used venv
     for sub in (".venv", "venv"):
         win = root / sub / "Scripts" / "python.exe"

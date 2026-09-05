@@ -92,18 +92,39 @@ def _indextts_status(cfg: dict) -> dict:
     }
 
 
+def _resolve_cosyvoice_install(cfg: dict) -> Path:
+    """Config path, runtime engines, or legacy clone-into-parent layout."""
+    cands: list[Path] = []
+    configured = Path(cfg.get("paths", {}).get("cosyvoice_dir", "tools/CosyVoice/CosyVoice"))
+    if not configured.is_absolute():
+        configured = ROOT / configured
+    cands.append(configured)
+    rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
+    if rt:
+        cands.append(Path(rt).expanduser().resolve() / "engines" / "CosyVoice")
+    cands.append(ROOT / "tools" / "CosyVoice" / "CosyVoice")
+    cands.append(ROOT / "tools" / "CosyVoice")
+
+    def _ok(p: Path) -> bool:
+        return (p / "requirements.txt").is_file() or (p / "venv" / "Scripts" / "python.exe").is_file()
+
+    for p in cands:
+        if _ok(p):
+            return p
+    return configured
+
+
 def _cosyvoice_status(cfg: dict) -> dict:
-    install = Path(cfg.get("paths", {}).get("cosyvoice_dir", "tools/CosyVoice/CosyVoice"))
-    if not install.is_absolute():
-        install = ROOT / install
+    install = _resolve_cosyvoice_install(cfg)
     model = install / "pretrained_models" / "CosyVoice2-0.5B"
     missing: list[str] = []
-    if not _venv_ok(cfg, "cosyvoice_dir"):
+    py = install / "venv" / ("Scripts" if os.name == "nt" else "bin") / (
+        "python.exe" if os.name == "nt" else "python"
+    )
+    if not py.is_file():
         missing.append("Python 虚拟环境未安装")
     if not model.is_dir():
         missing.append("CosyVoice2-0.5B 模型目录")
-    # Catch incomplete pip installs (setup used to abort on whisper / torch pin conflicts)
-    py = install / "venv" / ("Scripts" if os.name == "nt" else "bin") / ("python.exe" if os.name == "nt" else "python")
     if py.is_file():
         try:
             chk = subprocess.run(
@@ -119,7 +140,13 @@ def _cosyvoice_status(cfg: dict) -> dict:
         except (OSError, subprocess.TimeoutExpired):
             pass
     ready = len(missing) == 0
-    return {"installed": _venv_ok(cfg, "cosyvoice_dir"), "ready": ready, "preset_ready": ready, "missing": missing}
+    return {
+        "installed": py.is_file(),
+        "ready": ready,
+        "preset_ready": ready,
+        "missing": missing,
+        "install_dir": str(install),
+    }
 
 
 def _piper_status(cfg: dict) -> dict:

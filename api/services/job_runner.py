@@ -665,6 +665,16 @@ def run_engine_install(
             install = Path(rt).expanduser().resolve() / "engines" / "IndexTTS"
         ps_args.extend(["-Root", str(root), "-InstallDir", str(install)])
         tick(0.03, f"安装目录：{install}")
+    elif eng == "cosyvoice":
+        rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
+        if rt:
+            install = Path(rt).expanduser().resolve() / "engines" / "CosyVoice"
+        else:
+            install = Path(cfg.get("paths", {}).get("cosyvoice_dir") or "tools/CosyVoice/CosyVoice")
+            if not install.is_absolute():
+                install = root / install
+        ps_args.extend(["-Root", str(root), "-InstallDir", str(install)])
+        tick(0.03, f"安装目录：{install}")
 
     env = os.environ.copy()
     env.setdefault("PYTHONUTF8", "1")

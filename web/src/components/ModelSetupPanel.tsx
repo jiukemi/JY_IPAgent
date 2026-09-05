@@ -84,14 +84,15 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
     void load()
   }, [open, load])
 
-  // Auto-refresh once per finished install (do not re-alert when load/onRefresh identity changes)
-  const seenInstallTick = useRef(0)
+  // Auto-refresh once per finished install job id (Strict Mode remount-safe)
+  const seenInstallJobs = useRef<Set<string>>(new Set())
   useEffect(() => {
     const fin = jobQueue.lastFinished
     const tick = jobQueue.completionTick
     if (!fin || fin.type !== 'engine_install' || tick <= 0) return
-    if (seenInstallTick.current === tick) return
-    seenInstallTick.current = tick
+    const key = String(fin.id || `${fin.title}:${fin.status}:${tick}`)
+    if (seenInstallJobs.current.has(key)) return
+    seenInstallJobs.current.add(key)
     void load().then(() => onRefresh?.())
     if (fin.status === 'done') {
       const ready = fin.result?.ready !== false

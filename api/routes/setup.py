@@ -103,6 +103,19 @@ async def install_stream(engine: str = Query(...)):
                 install = _P(rt).expanduser().resolve() / "engines" / "IndexTTS"
             ps_cmd.extend(["-Root", str(ROOT), "-InstallDir", str(install)])
             yield f"data: {json.dumps({'type': 'log', 'line': f'InstallDir={install}', 'p': 0.03}, ensure_ascii=False)}\n\n"
+        elif eng == "cosyvoice":
+            import os
+            from pathlib import Path as _P
+
+            rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
+            if rt:
+                install = _P(rt).expanduser().resolve() / "engines" / "CosyVoice"
+            else:
+                install = _P(cfg.get("paths", {}).get("cosyvoice_dir") or "tools/CosyVoice/CosyVoice")
+                if not install.is_absolute():
+                    install = ROOT / install
+            ps_cmd.extend(["-Root", str(ROOT), "-InstallDir", str(install)])
+            yield f"data: {json.dumps({'type': 'log', 'line': f'InstallDir={install}', 'p': 0.03}, ensure_ascii=False)}\n\n"
 
         proc = await asyncio.create_subprocess_exec(
             *ps_cmd,
