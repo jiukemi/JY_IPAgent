@@ -3,17 +3,72 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Callable
 
 ProgressFn = Callable[[float, str], None]
 
+# FunASR / ModelScope often dump banners to stdout; strip before treating as 口播.
+_ASR_NOISE_LINE = re.compile(
+    r"(?i)^(?:"
+    r"funasr version\b.*"
+    r"|check update of funasr\b.*"
+    r"|you are using the latest version\b.*"
+    r"|loading remote code failed\b.*"
+    r"|download.*model.*"
+    r"|disable.?update\b.*"
+    r")$"
+)
+_ASR_NOISE_INLINE = re.compile(
+    r"(?is)"
+    r"(?:funasr version:[^\n]*\n?)+"
+    r"(?:check update of funasr[^\n]*\n?)*"
+    r"(?:you may disable[^\n]*\n?)*"
+    r"(?:you are using the latest version[^\n]*\n?)*"
+    r"(?:loading remote code failed[^\n]*\n?)*"
+)
+
 
 def _emit(on_progress: ProgressFn | None, p: float, msg: str) -> None:
     if on_progress:
         on_progress(p, msg)
+
+
+def sanitize_asr_transcript(text: str) -> str:
+    """Remove FunASR/ModelScope console banners accidentally captured as transcript."""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    cleaned = _ASR_NOISE_INLINE.sub("", raw).strip()
+    lines = []
+    for line in cleaned.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if _ASR_NOISE_LINE.match(s):
+            continue
+        if s.lower().startswith("funasr version"):
+            continue
+        if "no module named 'model'" in s.lower() or 'no module named "model"' in s.lower():
+            continue
+        if "loading remote code failed" in s.lower():
+            continue
+        lines.append(line.rstrip())
+    out = "\n".join(lines).strip()
+    # Prefer Chinese/script body: if still starts with English tooling noise, drop first paras
+    while True:
+        low = out[:80].lower()
+        if low.startswith("funasr") or low.startswith("check update") or low.startswith("you are using"):
+            parts = out.split("\n", 1)
+            out = parts[1].strip() if len(parts) > 1 else ""
+            continue
+        break
+    return out
 
 
 def extract_audio_for_asr(
@@ -80,7 +135,11 @@ def transcribe_whisper(
             f"Whisper 未安装: {whisper_dir}\n请到设置安装 Whisper，或运行 scripts/setup/setup_whisper.ps1"
         )
 
-    _emit(on_progress, 0.35, "Whisper 转写中…")
+    _emit(
+        on_progress,
+        0.35,
+        f"Whisper 转写中（模型 {model}，CPU 可能需 1–3 分钟，请耐心等待）…",
+    )
     py = whisper_python(cfg)
     env = os.environ.copy()
     env.setdefault("HF_ENDPOINT", cfg.get("hf_endpoint", "https://hf-mirror.com"))
@@ -97,7 +156,16 @@ def transcribe_whisper(
         "--language",
         language,
     ]
-    text = _write_and_read_asr_out(cmd, cwd=whisper_dir, env=env, out_path=out_path)
+    text = _run_asr_with_heartbeat(
+        cmd,
+        cwd=whisper_dir,
+        env=env,
+        out_path=out_path,
+        on_progress=on_progress,
+        base_pct=0.35,
+        label="Whisper",
+    )
+    text = sanitize_asr_transcript(text)
     if not text:
         raise RuntimeError("Whisper 未识别到有效口播文案")
     _emit(on_progress, 0.95, "转写完成")
@@ -227,28 +295,68 @@ def _write_and_read_asr_out(cmd: list[str], *, cwd: Path, env: dict, out_path: P
     if result.returncode != 0 and (
         "unrecognized arguments" in (stderr + stdout).lower()
         or "unrecognized arguments" in (stderr + stdout)
-        or "--out" in (stderr + stdout) and "error:" in (stderr + stdout).lower()
+        or ("--out" in (stderr + stdout) and "error:" in (stderr + stdout).lower())
     ):
         # Legacy runner without --out
         result = _run(list(cmd))
         stderr = _decode_pipe(result.stderr)
         stdout = _decode_pipe(result.stdout)
         if result.returncode == 0 and stdout:
+            clean = sanitize_asr_transcript(stdout)
             try:
-                out_path.write_text(stdout + "\n", encoding="utf-8")
+                out_path.write_text((clean or stdout) + "\n", encoding="utf-8")
             except OSError:
                 pass
-            return stdout
+            return clean or stdout
 
     if out_path.is_file() and out_path.stat().st_size > 0:
-        text = out_path.read_text(encoding="utf-8").strip()
+        text = sanitize_asr_transcript(out_path.read_text(encoding="utf-8"))
         if text:
             return text
+    stdout = sanitize_asr_transcript(stdout)
     if result.returncode != 0:
         raise RuntimeError((stderr or stdout or "ASR 进程失败").strip())
     if not stdout:
         raise RuntimeError((stderr or "ASR 未识别到有效口播文案").strip())
     return stdout
+
+
+def _run_asr_with_heartbeat(
+    cmd: list[str],
+    *,
+    cwd: Path,
+    env: dict,
+    out_path: Path,
+    on_progress: ProgressFn | None,
+    base_pct: float,
+    label: str,
+) -> str:
+    """Block on ASR but keep UI progress moving so users don't think it's frozen."""
+    stop = threading.Event()
+    started = time.time()
+
+    def _beat() -> None:
+        tips = (
+            "加载模型…",
+            "转写中（CPU 可能较慢）…",
+            "仍在处理，请稍候…",
+            "接近完成…",
+        )
+        i = 0
+        while not stop.wait(6.0):
+            i += 1
+            elapsed = int(time.time() - started)
+            tip = tips[min(i - 1, len(tips) - 1)]
+            pct = min(0.88, base_pct + 0.03 * i)
+            _emit(on_progress, pct, f"{label} {tip}（已 {elapsed}s）")
+
+    th = threading.Thread(target=_beat, daemon=True)
+    th.start()
+    try:
+        return _write_and_read_asr_out(cmd, cwd=cwd, env=env, out_path=out_path)
+    finally:
+        stop.set()
+        th.join(timeout=1.0)
 
 
 def _resolve_funasr_dir(cfg: dict) -> Path:
@@ -291,17 +399,21 @@ def transcribe_funasr(
 
         text = try_worker_transcribe(cfg, wav_path)
         if text:
-            _emit(on_progress, 0.95, "FunASR 转写完成（常驻 worker）")
-            return text
+            text = sanitize_asr_transcript(text)
+            if text:
+                _emit(on_progress, 0.95, "FunASR 转写完成（常驻 worker）")
+                return text
     except Exception:
         pass
 
     # Fallback: one-shot subprocess (reloads model each call).
-    _emit(on_progress, 0.4, "FunASR 转写中（首次加载模型，约 10-30 秒）…")
+    _emit(on_progress, 0.4, "FunASR 转写中（首次加载模型，约 10–60 秒）…")
     py = _funasr_python(cfg)
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    # Quiet ModelScope/FunASR update prompts that pollute stdout on older runners.
+    env.setdefault("MODELSCOPE_ENVIRONMENT", "offline")
     out_path = wav_path.with_name(wav_path.stem + ".funasr.txt")
     cmd = [
         py,
@@ -312,9 +424,18 @@ def transcribe_funasr(
         model,
     ]
     try:
-        text = _write_and_read_asr_out(cmd, cwd=funasr_dir, env=env, out_path=out_path)
+        text = _run_asr_with_heartbeat(
+            cmd,
+            cwd=funasr_dir,
+            env=env,
+            out_path=out_path,
+            on_progress=on_progress,
+            base_pct=0.4,
+            label="FunASR",
+        )
     except RuntimeError as exc:
         raise RuntimeError(f"FunASR 转写失败:\n{exc}") from exc
+    text = sanitize_asr_transcript(text)
     if not text:
         raise RuntimeError("FunASR 未识别到有效口播文案")
     # Guard: heavily corrupted pipe/file should not be accepted as 口播

@@ -54,12 +54,15 @@ if ($rt) {
   }
 }
 
-# Minimal runner (always refresh so --out stays in sync with extract.py)
+# Minimal runner (always refresh so --out / quiet load stay in sync with extract.py)
 $runner = Join-Path $funDir "run_asr.py"
 @'
 """Minimal FunASR SenseVoice CLI used by script/extract.py."""
 from __future__ import annotations
 import argparse
+import contextlib
+import io
+import os
 from pathlib import Path
 
 def main() -> None:
@@ -68,9 +71,21 @@ def main() -> None:
     p.add_argument("--model", default="sensevoice")
     p.add_argument("--out", default="", help="Write transcript UTF-8 file (optional)")
     args = p.parse_args()
-    from funasr import AutoModel
-    model = AutoModel(model="iic/SenseVoiceSmall", trust_remote_code=True)
-    res = model.generate(input=str(Path(args.audio).resolve()))
+    # Suppress FunASR/ModelScope version / update banners on stdout/stderr.
+    os.environ.setdefault("MODELSCOPE_ENVIRONMENT", "offline")
+    sink = io.StringIO()
+    with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+        from funasr import AutoModel
+        try:
+            model = AutoModel(
+                model="iic/SenseVoiceSmall",
+                trust_remote_code=True,
+                disable_update=True,
+            )
+        except TypeError:
+            # Older funasr without disable_update kwarg
+            model = AutoModel(model="iic/SenseVoiceSmall", trust_remote_code=True)
+        res = model.generate(input=str(Path(args.audio).resolve()))
     text = ""
     if isinstance(res, list) and res:
         item = res[0]

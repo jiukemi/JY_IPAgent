@@ -60,11 +60,19 @@ def main() -> None:
     p.add_argument("--out", default="", help="Write transcript UTF-8 file (optional)")
     args = p.parse_args()
     from faster_whisper import WhisperModel
-    model = WhisperModel(args.model, device="cpu", compute_type="int8")
+    device, compute = "cpu", "int8"
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device, compute = "cuda", "float16"
+    except Exception:
+        pass
+    model = WhisperModel(args.model, device=device, compute_type=compute)
     segments, _info = model.transcribe(str(Path(args.audio).resolve()), language=args.language or None)
     text = "".join(seg.text for seg in segments).strip()
     if args.out:
         Path(args.out).write_text(text + ("\n" if text else ""), encoding="utf-8")
+    # Keep stdout clean: only the transcript (extract may fall back to stdout).
     print(text)
 
 if __name__ == "__main__":
