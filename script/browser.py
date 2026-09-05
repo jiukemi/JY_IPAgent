@@ -30,8 +30,10 @@ _LOGIN_STALE_SECONDS = 600.0
 # Persistent profile is exclusive — while extract/CDN holds it, status checks must not
 # launch another Chrome or the UI falsely shows「登录掉了」.
 _profile_busy = threading.Lock()
+_profile_busy_held = False
 _profile_busy_platform: str = ""
 _profile_busy_reason: str = ""
+_profile_busy_since: float = 0.0
 
 
 def playwright_available() -> bool:
@@ -124,24 +126,93 @@ def _page_looks_blank(page) -> bool:
     return "<body" in low and len(text) < 1200
 
 
+def _mark_profile_busy(platform_id: str, reason: str) -> None:
+    global _profile_busy_held, _profile_busy_platform, _profile_busy_reason, _profile_busy_since
+    _profile_busy_held = True
+    _profile_busy_platform = platform_id or "douyin"
+    _profile_busy_reason = reason
+    _profile_busy_since = time.time()
+
+
+def _release_profile_busy() -> None:
+    global _profile_busy_held, _profile_busy_platform, _profile_busy_reason, _profile_busy_since
+    if not _profile_busy_held:
+        return
+    _profile_busy_held = False
+    _profile_busy_platform = ""
+    _profile_busy_reason = ""
+    _profile_busy_since = 0.0
+    try:
+        _profile_busy.release()
+    except RuntimeError:
+        pass
+
+
+def _request_cancel_login() -> None:
+    """Signal headed login to close and drop any held Playwright context."""
+    _login_cancel.set()
+    for ctx in list(_login_ctx_holder):
+        try:
+            ctx.close()
+        except Exception:
+            pass
+    _login_ctx_holder.clear()
+
+
+def steal_login_profile_lock(*, wait_seconds: float = 12.0) -> bool:
+    """Cancel headed login so extract/CDN can take the persistent profile.
+
+    Returns True if the profile lock is free afterward.
+    """
+    if not _profile_busy.locked():
+        return True
+    reason = _profile_busy_reason or ""
+    if reason not in ("login",):
+        return False
+    _request_cancel_login()
+    with _login_lock:
+        running = _login_running
+    if not running:
+        # Orphan login hold (thread died / flag cleared) — drop in-process lock.
+        _release_profile_busy()
+        return True
+    deadline = time.time() + max(1.0, wait_seconds)
+    while time.time() < deadline:
+        if not _profile_busy.locked():
+            return True
+        with _login_lock:
+            still = _login_running
+        if not still and _profile_busy_reason == "login":
+            _release_profile_busy()
+            return True
+        time.sleep(0.2)
+    # Last resort: drop in-process login lock so CDN can proceed.
+    if _profile_busy_reason == "login":
+        _release_profile_busy()
+        return True
+    return not _profile_busy.locked()
+
+
 @contextmanager
 def persistent_context(
     cfg: dict, *, headless: bool = True, platform_id: str = ""
 ) -> Iterator:
     """Yield Playwright persistent Chromium context (saved cookies)."""
-    global _profile_busy_platform, _profile_busy_reason
     _require_playwright()
     from playwright.sync_api import sync_playwright
 
     user_dir = user_data_dir(cfg, platform_id)
     got_busy = _profile_busy.acquire(blocking=False)
+    if not got_busy and _profile_busy_reason == "login":
+        # Extract/CDN wins over a stuck headed login window.
+        if steal_login_profile_lock(wait_seconds=12.0):
+            got_busy = _profile_busy.acquire(blocking=False)
     if not got_busy:
         raise RuntimeError(
             f"浏览器资料夹正被占用（{_profile_busy_reason or '其它任务'}）。"
-            "请等提取/CDN 完成后再检测登录，勿同时开两个浏览器任务。"
+            "请关闭「浏览器登录」窗口后重试提取；或点「强制重开」结束卡住的登录。"
         )
-    _profile_busy_platform = platform_id or "douyin"
-    _profile_busy_reason = "headless" if headless else "headed"
+    _mark_profile_busy(platform_id or "douyin", "headless" if headless else "headed")
     _cleanup_stale_locks(user_dir)
     try:
         with sync_playwright() as pw:
@@ -162,11 +233,12 @@ def persistent_context(
             try:
                 yield ctx
             finally:
-                ctx.close()
+                try:
+                    ctx.close()
+                except Exception:
+                    pass
     finally:
-        _profile_busy_platform = ""
-        _profile_busy_reason = ""
-        _profile_busy.release()
+        _release_profile_busy()
 
 
 def profile_busy_status(platform_id: str = "") -> dict | None:
@@ -328,7 +400,6 @@ def check_login_status(cfg: dict, platform_id: str = "") -> dict:
 
 def open_login_browser(cfg: dict, *, wait_close: bool = True, platform_id: str = "") -> dict:
     """Open headed browser for manual platform login; cookies persist in profile."""
-    global _profile_busy_platform, _profile_busy_reason
     _require_playwright()
     from playwright.sync_api import sync_playwright
 
@@ -338,12 +409,20 @@ def open_login_browser(cfg: dict, *, wait_close: bool = True, platform_id: str =
         raise RuntimeError(f"未知平台: {platform_id}")
 
     if not _profile_busy.acquire(blocking=False):
-        raise RuntimeError(
-            f"浏览器资料夹正被占用（{_profile_busy_reason or '提取/CDN'}）。"
-            "请等当前任务结束后再登录。"
-        )
-    _profile_busy_platform = platform_id
-    _profile_busy_reason = "login"
+        # If extract holds it, fail; if orphan login, steal ourselves.
+        if _profile_busy_reason == "login":
+            steal_login_profile_lock(wait_seconds=5.0)
+            if not _profile_busy.acquire(blocking=False):
+                raise RuntimeError(
+                    f"浏览器资料夹正被占用（{_profile_busy_reason or '提取/CDN'}）。"
+                    "请等当前任务结束后再登录。"
+                )
+        else:
+            raise RuntimeError(
+                f"浏览器资料夹正被占用（{_profile_busy_reason or '提取/CDN'}）。"
+                "请等当前任务结束后再登录。"
+            )
+    _mark_profile_busy(platform_id, "login")
     user_dir = user_data_dir(cfg, platform_id)
     _cleanup_stale_locks(user_dir)
     closed = threading.Event()
@@ -432,14 +511,23 @@ def open_login_browser(cfg: dict, *, wait_close: bool = True, platform_id: str =
                 _show_manual_hint(str(exc))
 
             if wait_close:
+                # Cap wait so a stuck Chrome window cannot block CDN forever.
+                deadline = time.time() + _LOGIN_STALE_SECONDS
                 while not closed.is_set():
-                    if _login_cancel.is_set():
+                    if _login_cancel.is_set() or time.time() >= deadline:
                         closed.set()
                         break
-                    if closed.wait(timeout=1.5):
+                    if closed.wait(timeout=1.0):
                         break
                     try:
-                        _ = ctx.pages
+                        pages = ctx.pages
+                        if not pages:
+                            closed.set()
+                            break
+                        browser = ctx.browser
+                        if browser is not None and not browser.is_connected():
+                            closed.set()
+                            break
                     except Exception:
                         closed.set()
                         break
@@ -462,25 +550,12 @@ def open_login_browser(cfg: dict, *, wait_close: bool = True, platform_id: str =
             }
     finally:
         _login_ctx_holder.clear()
-        _profile_busy_platform = ""
-        _profile_busy_reason = ""
-        _profile_busy.release()
+        _release_profile_busy()
 
 
 def _is_login_stale() -> bool:
     """True if the running guard has been held past the stale timeout."""
-    return _login_started_at and (time.time() - _login_started_at) > _LOGIN_STALE_SECONDS
-
-
-def _request_cancel_login() -> None:
-    """Signal headed login to close and drop any held Playwright context."""
-    _login_cancel.set()
-    for ctx in list(_login_ctx_holder):
-        try:
-            ctx.close()
-        except Exception:
-            pass
-    _login_ctx_holder.clear()
+    return bool(_login_started_at and (time.time() - _login_started_at) > _LOGIN_STALE_SECONDS)
 
 
 def start_login_async(cfg: dict, *, force: bool = False, platform_id: str = "") -> dict:
