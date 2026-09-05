@@ -5,5 +5,5 @@ python-multipart>=0.0.12
 pydantic>=2.0.0
 PyYAML>=6.0.0
 Pillow>=10.0.0
-# Online TTS (Edge Neural) — used when tts backend is "edge"
+# Online TTS (Edge Neural) - used when tts backend is "edge"
 edge-tts>=6.1.0

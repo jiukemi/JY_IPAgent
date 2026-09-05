@@ -7,6 +7,9 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $env:PYTHONUNBUFFERED = "1"
+# zh-CN Windows: pip may decode requirement files as GBK; force UTF-8 for Python/pip I/O.
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
 
 if (-not $Root) {
   $Root = Split-Path -Parent $PSScriptRoot
@@ -14,6 +17,8 @@ if (-not $Root) {
 if (-not $RuntimeRoot) {
   $RuntimeRoot = Join-Path $Root "data\runtime"
 }
+# Probe scripts live under RuntimeRoot; ensure package imports resolve to $Root.
+$env:PYTHONPATH = $Root
 
 $VenvDir = Join-Path $RuntimeRoot "venv"
 $VenvPy = Join-Path $VenvDir "Scripts\python.exe"
@@ -452,12 +457,17 @@ if ($sysFfmpeg) {
 } else {
   Write-Log "==> download FFmpeg"
   $env:AGENT_RUNTIME_DIR = $RuntimeRoot
+  $env:PYTHONPATH = $Root
   $probeFf = Join-Path $RuntimeRoot "_probe_ffmpeg.py"
-  @'
+  # Script path is under runtime/; insert Root so "import workflow" works.
+  $rootLit = $Root.Replace("\", "\\")
+  @"
+import sys
+sys.path.insert(0, r"$rootLit")
 from workflow.runtime_bootstrap import ensure_ffmpeg
 import json
 print(json.dumps(ensure_ffmpeg(True), ensure_ascii=False))
-'@ | Set-Content -Path $probeFf -Encoding ASCII
+"@ | Set-Content -Path $probeFf -Encoding ASCII
   $code = Invoke-PyExe -Exe $PyExe -Args @($probeFf) -HeartbeatPct 90 -HeartbeatLabel "Download FFmpeg"
   Remove-Item $probeFf -Force -ErrorAction SilentlyContinue
   if ($code -ne 0) { Write-Log "!! FFmpeg download failed (non-fatal)" }
