@@ -1027,14 +1027,25 @@ function registerSplashIpc() {
       path.join(runtimeDir(), 'data'),
       localApp ? path.join(localApp, 'JY_IPAgent') : '',
       app.getPath('desktop'),
+      (() => {
+        try {
+          return app.getPath('downloads')
+        } catch {
+          return ''
+        }
+      })(),
       os.tmpdir(),
     ]
       .filter(Boolean)
       .map((p) => path.resolve(p))
-    const okRoot = allowed.some(
-      (root) => resolved === root || resolved.startsWith(root + path.sep),
-    )
-    if (!okRoot) return { ok: false, message: '只能打开本机数据 / 桌面安装脚本' }
+    // Also allow JY-Install-Docker.cmd under any drive root Docker folder
+    const isInstallScript =
+      /[/\\]JY-Install-Docker\.cmd$/i.test(resolved) ||
+      /[/\\]九易AI-安装Docker\.cmd$/i.test(resolved)
+    const okRoot =
+      isInstallScript ||
+      allowed.some((root) => resolved === root || resolved.startsWith(root + path.sep))
+    if (!okRoot) return { ok: false, message: '只能打开本机数据 / 安装脚本' }
     if (!fs.existsSync(resolved)) return { ok: false, message: `文件不存在：${resolved}` }
     // Prefer reveal-in-folder so user literally sees the file
     try {
@@ -1058,19 +1069,17 @@ function registerSplashIpc() {
 
   ipcMain.handle('desktop:elevate-docker-install', async (_e, payload) => {
     const installer = typeof payload?.installer === 'string' ? payload.installer.trim() : ''
-    const cmdPathIn = typeof payload?.cmd_path === 'string' ? payload.cmd_path.trim() : ''
     const installRoot = typeof payload?.install_root === 'string' ? payload.install_root.trim() : ''
     const args = Array.isArray(payload?.args) ? payload.args.map(String) : []
 
     const exe = installer && fs.existsSync(installer) ? path.resolve(installer) : ''
     if (!exe) {
-      return { ok: false, message: '安装包文件不存在，请重新扫描/选择 Docker Desktop 安装包。' }
+      return { ok: false, message: '安装包文件不存在，请重新扫描/选择 Docker Desktop 安装包。', verified: false }
     }
     if (!installRoot) {
-      return { ok: false, message: '未指定安装目标磁盘。' }
+      return { ok: false, message: '未指定安装目标磁盘。', verified: false }
     }
 
-    // Always (re)write a visible Desktop script so用户绝对找得到
     const appDir = path.join(installRoot, 'DockerDesktop')
     const wslRoot = path.join(installRoot, 'wsl')
     const winRoot = path.join(installRoot, 'windows-containers')
@@ -1081,46 +1090,148 @@ function registerSplashIpc() {
         /* ignore */
       }
     }
+
+    // ASCII-only filename — Chinese names + redirected Desktop caused "提示有文件、桌面没有" complaints.
+    const CMD_NAME = 'JY-Install-Docker.cmd'
     const cmdBody = [
       '@echo off',
       'chcp 65001 >nul',
       'setlocal',
-      'title 九易AI - 安装 Docker Desktop',
+      'title JY_IPAgent - Install Docker Desktop',
       'echo ========================================',
-      'echo  九易AI：安装 Docker 到所选磁盘',
-      `echo  目标: ${installRoot}`,
+      'echo  JY_IPAgent: install Docker to selected drive',
+      `echo  Target: ${installRoot}`,
       'echo ========================================',
       'echo.',
       `"${exe}" install --accept-license --installation-dir=${appDir} --wsl-default-data-root=${wslRoot} --windows-containers-default-data-root=${winRoot}`,
       'set ERR=%ERRORLEVEL%',
       'echo.',
       'if not %ERR%==0 (',
-      '  echo [失败] 退出码 %ERR%',
+      '  echo [FAILED] exit code %ERR%',
       '  pause',
       '  exit /b %ERR%',
       ')',
-      'echo [完成] 可关闭窗口，然后打开 Docker Desktop。',
+      'echo [OK] Close this window, then open Docker Desktop.',
       'pause',
       'exit /b 0',
       '',
     ].join('\r\n')
 
-    const desk = app.getPath('desktop')
-    const deskCmd = path.join(desk, '九易AI-安装Docker.cmd')
-    const localCmd = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'JY_IPAgent', '九易AI-安装Docker.cmd')
-    try {
-      fs.mkdirSync(path.dirname(localCmd), { recursive: true })
-      fs.writeFileSync(deskCmd, cmdBody, 'utf8')
-      fs.writeFileSync(localCmd, cmdBody, 'utf8')
-    } catch (e) {
-      return {
-        ok: false,
-        message: `无法在桌面写入安装脚本：${e instanceof Error ? e.message : String(e)}`,
-        cmd_path: cmdPathIn || '',
+    const dirCandidates = []
+    const pushDir = (p) => {
+      if (!p || typeof p !== 'string') return
+      try {
+        const resolved = path.resolve(p.trim())
+        if (!resolved || dirCandidates.includes(resolved)) return
+        fs.mkdirSync(resolved, { recursive: true })
+        if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+          dirCandidates.push(resolved)
+        }
+      } catch {
+        /* ignore */
       }
     }
-    if (!fs.existsSync(deskCmd)) {
-      return { ok: false, message: `桌面脚本写入失败：${deskCmd}`, cmd_path: localCmd }
+    try {
+      pushDir(app.getPath('desktop'))
+    } catch {
+      /* ignore */
+    }
+    try {
+      pushDir(app.getPath('downloads'))
+    } catch {
+      /* ignore */
+    }
+    try {
+      const shellDesk = execSync(
+        'powershell -NoProfile -Command "[Environment]::GetFolderPath(\'Desktop\')"',
+        { encoding: 'utf8', windowsHide: true, timeout: 8000 },
+      )
+        .trim()
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .pop()
+      pushDir(shellDesk)
+    } catch {
+      /* ignore */
+    }
+    pushDir(path.join(os.homedir(), 'Desktop'))
+    pushDir(path.join(os.homedir(), '桌面'))
+    if (process.env.PUBLIC) {
+      pushDir(path.join(process.env.PUBLIC, 'Desktop'))
+      pushDir(path.join(process.env.PUBLIC, '桌面'))
+    }
+    pushDir(installRoot)
+    pushDir(path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'JY_IPAgent'))
+
+    const written = []
+    const writeErrors = []
+    for (const dir of dirCandidates) {
+      const target = path.join(dir, CMD_NAME)
+      try {
+        fs.writeFileSync(target, cmdBody, 'utf8')
+        if (fs.existsSync(target) && fs.statSync(target).size > 50) {
+          written.push(target)
+        } else {
+          writeErrors.push(`${target} (写入后不存在或过小)`)
+        }
+      } catch (e) {
+        writeErrors.push(`${target}: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+
+    // Prefer shell Desktop, then downloads, then install root
+    let deskRoots = []
+    try {
+      deskRoots = [path.resolve(app.getPath('desktop'))]
+    } catch {
+      deskRoots = []
+    }
+    const pick =
+      written.find((p) => deskRoots.some((d) => p.startsWith(d + path.sep))) ||
+      written.find((p) => /downloads/i.test(p)) ||
+      written.find((p) => p.startsWith(path.resolve(installRoot) + path.sep)) ||
+      written[0] ||
+      ''
+
+    if (!pick || !fs.existsSync(pick)) {
+      return {
+        ok: false,
+        verified: false,
+        message:
+          '安装脚本未能写入任何可见位置（桌面/下载/安装盘均失败）。\n' +
+          (writeErrors.length ? writeErrors.slice(0, 6).join('\n') : '无详细错误'),
+        cmd_path: '',
+        written_paths: [],
+      }
+    }
+
+    // Reveal only a file we just verified exists
+    try {
+      shell.showItemInFolder(pick)
+    } catch {
+      try {
+        spawn('explorer.exe', [`/select,${pick}`], { detached: true, stdio: 'ignore' }).unref()
+      } catch {
+        /* ignore */
+      }
+    }
+
+    try {
+      await dialog.showMessageBox({
+        type: fs.existsSync(pick) ? 'info' : 'error',
+        title: '安装脚本已写入（已校验存在）',
+        message: `文件名：${CMD_NAME}`,
+        detail:
+          `完整路径：\n${pick}\n\n` +
+          `同时写入了 ${written.length} 处：\n${written.join('\n')}\n\n` +
+          '请看是否弹出「用户账户控制」并点「是」。\n' +
+          '若没有弹窗：在上面这个文件上右键 →「以管理员身份运行」。',
+        buttons: ['知道了'],
+        noLink: true,
+      })
+    } catch {
+      /* ignore */
     }
 
     const elevateArgs =
@@ -1128,71 +1239,39 @@ function registerSplashIpc() {
         ? args.join(' ')
         : `install --accept-license --installation-dir=${appDir} --wsl-default-data-root=${wslRoot} --windows-containers-default-data-root=${winRoot}`
 
-    // Shell.Application.ShellExecute runas — most reliable UAC from Electron
     const vbs = path.join(os.tmpdir(), `jy-elevate-docker-${Date.now()}.vbs`)
     const vbsBody =
       'Set sh = CreateObject("Shell.Application")\r\n' +
       `sh.ShellExecute ${JSON.stringify(exe)}, ${JSON.stringify(elevateArgs)}, "", "runas", 1\r\n`
+    let uacStarted = false
     try {
       fs.writeFileSync(vbs, vbsBody, 'utf8')
-    } catch (e) {
-      return {
-        ok: false,
-        message: `无法写入提权脚本：${e instanceof Error ? e.message : String(e)}`,
-        cmd_path: deskCmd,
-      }
-    }
-
-    try {
       spawn('wscript.exe', [vbs], { windowsHide: true, detached: true, stdio: 'ignore' }).unref()
-    } catch (e) {
-      try {
-        fs.unlinkSync(vbs)
-      } catch {
-        /* ignore */
-      }
-      // Fall through to reveal desktop script
-      try {
-        shell.showItemInFolder(deskCmd)
-      } catch {
-        spawn('explorer.exe', [`/select,${deskCmd}`], { detached: true, stdio: 'ignore' })
-      }
-      return {
-        ok: false,
-        message:
-          `自动请求管理员权限失败。已在【桌面】生成「九易AI-安装Docker.cmd」，请右键它 →「以管理员身份运行」。\n` +
-          `完整路径：${deskCmd}`,
-        cmd_path: deskCmd,
-      }
-    }
-
-    // Clean vbs later; ShellExecute is async — always tell user about Desktop fallback
-    setTimeout(() => {
-      try {
-        fs.unlinkSync(vbs)
-      } catch {
-        /* ignore */
-      }
-    }, 15000)
-
-    // Also reveal the desktop script so用户看得见（即使 UAC 已弹出也不妨碍）
-    try {
-      shell.showItemInFolder(deskCmd)
+      uacStarted = true
+      setTimeout(() => {
+        try {
+          fs.unlinkSync(vbs)
+        } catch {
+          /* ignore */
+        }
+      }, 15000)
     } catch {
-      try {
-        spawn('explorer.exe', [`/select,${deskCmd}`], { detached: true, stdio: 'ignore' })
-      } catch {
-        /* ignore */
-      }
+      uacStarted = false
     }
 
     return {
       ok: true,
+      verified: true,
+      uac_started: uacStarted,
       message:
-        '已请求管理员权限：请看是否弹出「用户账户控制」，点「是」。\n\n' +
-        '如果没有弹窗：请到【桌面】找到「九易AI-安装Docker.cmd」，右键 →「以管理员身份运行」。\n' +
-        `（已为你打开该文件所在位置）\n路径：${deskCmd}`,
-      cmd_path: deskCmd,
+        (uacStarted
+          ? '已请求管理员权限（请看 UAC 弹窗）。\n'
+          : '未能自动弹出管理员确认。\n') +
+        `安装脚本已写入并校验存在：\n${pick}\n` +
+        (written.length > 1 ? `\n备份位置：\n${written.filter((p) => p !== pick).join('\n')}\n` : '') +
+        `\n文件名固定为 ${CMD_NAME}（英文，避免找不到）。右键 →「以管理员身份运行」。`,
+      cmd_path: pick,
+      written_paths: written,
     }
   })
 }

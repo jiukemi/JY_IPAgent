@@ -147,7 +147,13 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
               cmd_path?: string
               install_root?: string
               args?: string[]
-            }) => Promise<{ ok: boolean; message?: string; cmd_path?: string }>
+            }) => Promise<{
+              ok: boolean
+              message?: string
+              cmd_path?: string
+              verified?: boolean
+              written_paths?: string[]
+            }>
           }
         }
       ).agentDesktop
@@ -171,29 +177,39 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
           args: prep.args,
         })
         push(elev.message || '')
-        const deskFile = elev.cmd_path || prep.cmd_path || ''
+        const deskFile = elev.verified ? elev.cmd_path || '' : ''
+        const paths = elev.written_paths || []
+        if (!elev.verified || !deskFile) {
+          setAlert({
+            title: '安装脚本没有真正写出来',
+            message:
+              `${elev.message || '写入失败'}\n\n` +
+              '不会再假装「已在桌面生成」。请把上面完整报错发过来，或手动右键以管理员运行 Docker 安装包。',
+            variant: 'error',
+          })
+          await refresh()
+          return
+        }
         setAlert({
-          title: elev.ok ? '请看桌面 / 管理员确认' : '请用桌面上的安装脚本',
+          title: elev.ok ? '脚本已写入（已校验）' : '请手动运行脚本',
           message:
             `${elev.message || ''}\n\n` +
             `安装包：${prep.installer || installerPath}\n` +
             `装到：${prep.install_root || installDrive}\n\n` +
-            (deskFile
-              ? `桌面文件（一定找得到）：九易AI-安装Docker.cmd\n完整路径：${deskFile}\n右键它 →「以管理员身份运行」。`
-              : '') +
-            (elev.ok ? '\n\n装完后打开 Docker，再点「重新检测」。' : ''),
+            `请找英文文件：JY-Install-Docker.cmd\n` +
+            `已确认存在：${deskFile}\n` +
+            (paths.length > 1 ? `其它备份：\n${paths.filter((p) => p !== deskFile).join('\n')}\n` : '') +
+            `右键 →「以管理员身份运行」。`,
           variant: elev.ok ? 'info' : 'warning',
         })
-        if (deskFile) {
-          try {
-            await (
-              window as unknown as {
-                agentDesktop?: { openPath?: (p: string) => Promise<unknown> }
-              }
-            ).agentDesktop?.openPath?.(deskFile)
-          } catch {
-            /* ignore */
-          }
+        try {
+          await (
+            window as unknown as {
+              agentDesktop?: { openPath?: (p: string) => Promise<unknown> }
+            }
+          ).agentDesktop?.openPath?.(deskFile)
+        } catch {
+          /* ignore */
         }
         await refresh()
         return
