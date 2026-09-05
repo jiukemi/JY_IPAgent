@@ -81,8 +81,8 @@ def heygem_service_status(cfg: dict) -> dict:
             state = "component_stopped"
         else:
             hint = (
-                "口播引擎未安装。请到设置→组件中心下载「口播引擎」。"
-                "不需要安装 Docker Desktop。"
+                "口播引擎未安装。请到设置 → 特殊引擎安装 →「口播引擎安装向导」："
+                "安装 Docker Desktop → 用夸克加速包导入镜像并启动。"
             )
             state = "need_component"
         can_start = bool(ready or comp) and (cuda_ok or ready)
@@ -115,17 +115,19 @@ def heygem_service_status(cfg: dict) -> dict:
             state = "need_docker"
         elif docker_ok and not present:
             hint = (
-                "Docker 可用但尚未克隆 Duix-Avatar。请运行 .\\scripts\\setup\\setup_heygem.ps1。"
+                "Docker 可用但尚未克隆 Duix-Avatar。"
+                "有外网/梯子时可在「本机环境」安装 HeyGem，或运行 .\\scripts\\setup\\setup_heygem.ps1；"
+                "无 Docker Hub 时请用设置 → 口播引擎安装向导 + 夸克加速包。"
                 f"（{_DEV_DOCKER_NOTE}）"
             )
             state = "not_installed"
         else:
             hint = (
-                "口播引擎未就绪：既无便携组件，也无可用的 Docker/Duix 部署。"
-                "开发机请安装并启动 Docker Desktop 后运行 .\\scripts\\setup\\setup_heygem.ps1；"
-                "或等待组件中心提供「口播引擎」下载包。"
+                "口播引擎未就绪。请到设置 → 特殊引擎安装 →「口播引擎安装向导」："
+                "① 安装并启动 Docker Desktop  ② 夸克加速包导入镜像  ③ 一键启动。"
+                "有梯子能访问 GitHub/Docker Hub 时，也可在「本机环境 · GPU 与模型」里直接安装 HeyGem（仍需 Docker）。"
             )
-            state = "need_component"
+            state = "need_setup"
         # 无独显时不允许启动；显存偏低仍可试，但前端会强提示
         can_start = bool(ready or comp or docker_ok) and (cuda_ok or ready)
         runtime = "component" if comp else ("docker" if docker_ok else ("duix_files" if present else "none"))
@@ -154,8 +156,7 @@ def heygem_service_status(cfg: dict) -> dict:
         "gpu_hint": gpu_hint,
         "note": (
             "「已下载」≠「已就绪」：就绪需本机 8383 服务响应。"
-            "开发机通常用 Docker + tools/Duix-Avatar；"
-            "安装包用户走 data/components/heygem-runtime（正式 zip 托管后可下）。"
+            "当前迷你安装包主路径：Docker Desktop + 夸克加速包（或有梯子时 docker pull）。"
             "Built with DUIX.COM。"
         ),
     }
@@ -237,7 +238,7 @@ def stop_heygem() -> tuple[bool, str]:
     if strict_user():
         return (
             False,
-            "未安装口播引擎组件，无法停止。请到设置→组件中心下载「口播引擎」。",
+            "未安装口播引擎，无法停止。请到设置 → 特殊引擎安装 →「口播引擎安装向导」完成安装。",
         )
 
     cf = compose_file()

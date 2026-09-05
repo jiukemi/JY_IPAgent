@@ -332,7 +332,7 @@ async def heygem_start_stream():
     if not argv:
         raise HTTPException(
             status_code=400,
-            detail="口播引擎组件未就绪：请到设置→组件中心下载并安装，或检查 start.ps1",
+            detail="口播引擎未就绪：请到设置 → 特殊引擎安装 →「口播引擎安装向导」完成 Docker 与加速包，或检查 start.ps1",
         )
 
     async def events():

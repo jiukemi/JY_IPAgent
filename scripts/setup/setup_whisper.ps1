@@ -46,8 +46,7 @@ Write-Host "==> pip install faster-whisper"
 if ($LASTEXITCODE -ne 0) { throw "faster-whisper install failed exit=$LASTEXITCODE" }
 
 $runner = Join-Path $InstallDir "run_asr.py"
-if (-not (Test-Path $runner)) {
-  @'
+@'
 """Minimal faster-whisper CLI used by script/extract.py."""
 from __future__ import annotations
 import argparse
@@ -58,17 +57,19 @@ def main() -> None:
     p.add_argument("--audio", required=True)
     p.add_argument("--model", default="small")
     p.add_argument("--language", default="zh")
+    p.add_argument("--out", default="", help="Write transcript UTF-8 file (optional)")
     args = p.parse_args()
     from faster_whisper import WhisperModel
     model = WhisperModel(args.model, device="cpu", compute_type="int8")
     segments, _info = model.transcribe(str(Path(args.audio).resolve()), language=args.language or None)
     text = "".join(seg.text for seg in segments).strip()
+    if args.out:
+        Path(args.out).write_text(text + ("\n" if text else ""), encoding="utf-8")
     print(text)
 
 if __name__ == "__main__":
     main()
 '@ | Set-Content -Path $runner -Encoding UTF8
-}
 
 & $py -c "import faster_whisper; print('WHISPER_OK')"
 if ($LASTEXITCODE -ne 0) { throw "Whisper verify failed" }

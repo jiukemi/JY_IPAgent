@@ -203,27 +203,47 @@ def _decode_pipe(raw: bytes | str | None) -> str:
 
 
 def _write_and_read_asr_out(cmd: list[str], *, cwd: Path, env: dict, out_path: Path) -> str:
-    """Run ASR runner with --out file (UTF-8) to avoid Windows pipe encoding corruption."""
+    """Run ASR runner with --out file (UTF-8) to avoid Windows pipe encoding corruption.
+
+    Older Whisper/FunASR runners only print to stdout and reject --out; fall back
+    to stdout capture when that happens so existing installs keep working.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if out_path.exists():
         out_path.unlink(missing_ok=True)
-    full_cmd = list(cmd) + ["--out", str(out_path.resolve())]
-    result = subprocess.run(
-        full_cmd,
-        cwd=str(cwd.resolve()),
-        capture_output=True,
-        check=False,
-        env=env,
-    )
+
+    def _run(full_cmd: list[str]) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            full_cmd,
+            cwd=str(cwd.resolve()),
+            capture_output=True,
+            check=False,
+            env=env,
+        )
+
+    result = _run(list(cmd) + ["--out", str(out_path.resolve())])
+    stderr = _decode_pipe(result.stderr)
+    stdout = _decode_pipe(result.stdout)
+    if result.returncode != 0 and (
+        "unrecognized arguments" in (stderr + stdout).lower()
+        or "unrecognized arguments" in (stderr + stdout)
+        or "--out" in (stderr + stdout) and "error:" in (stderr + stdout).lower()
+    ):
+        # Legacy runner without --out
+        result = _run(list(cmd))
+        stderr = _decode_pipe(result.stderr)
+        stdout = _decode_pipe(result.stdout)
+        if result.returncode == 0 and stdout:
+            try:
+                out_path.write_text(stdout + "\n", encoding="utf-8")
+            except OSError:
+                pass
+            return stdout
+
     if out_path.is_file() and out_path.stat().st_size > 0:
         text = out_path.read_text(encoding="utf-8").strip()
         if text:
-            if result.returncode != 0:
-                # Prefer file content even if process exited oddly after writing
-                return text
             return text
-    stdout = _decode_pipe(result.stdout)
-    stderr = _decode_pipe(result.stderr)
     if result.returncode != 0:
         raise RuntimeError((stderr or stdout or "ASR 进程失败").strip())
     if not stdout:

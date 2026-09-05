@@ -54,10 +54,9 @@ if ($rt) {
   }
 }
 
-# Minimal runner if missing
+# Minimal runner (always refresh so --out stays in sync with extract.py)
 $runner = Join-Path $funDir "run_asr.py"
-if (-not (Test-Path $runner)) {
-  @'
+@'
 """Minimal FunASR SenseVoice CLI used by script/extract.py."""
 from __future__ import annotations
 import argparse
@@ -67,6 +66,7 @@ def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--audio", required=True)
     p.add_argument("--model", default="sensevoice")
+    p.add_argument("--out", default="", help="Write transcript UTF-8 file (optional)")
     args = p.parse_args()
     from funasr import AutoModel
     model = AutoModel(model="iic/SenseVoiceSmall", trust_remote_code=True)
@@ -78,12 +78,14 @@ def main() -> None:
             text = str(item.get("text") or item.get("value") or "")
         else:
             text = str(item)
-    print(text.strip())
+    text = text.strip()
+    if args.out:
+        Path(args.out).write_text(text + ("\n" if text else ""), encoding="utf-8")
+    print(text)
 
 if __name__ == "__main__":
     main()
 '@ | Set-Content -Path $runner -Encoding UTF8
-}
 
 Write-Host "==> verify packages"
 & $py -c "import importlib.util as u; assert u.find_spec('torch'); assert u.find_spec('funasr'); print('FUNASR_OK')"

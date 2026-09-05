@@ -325,7 +325,7 @@ def _heygem_status(cfg: dict) -> dict:
             missing.append(
                 st.get("hint")
                 or st.get("message")
-                or "HeyGem 未就绪：请启动 Docker Desktop 后点「一键启动」，或安装口播组件"
+                or "HeyGem 未就绪：请到设置 → 口播引擎安装向导（Docker + 夸克包），有梯子也可在本机环境安装（仍需 Docker）"
             )
         return {
             "installed": installed,
