@@ -432,37 +432,15 @@ if ($code -eq 0) {
   }
 }
 
-# Playwright browser binary (needed for browser login)
-Write-ProgressLine 72 "Install Playwright Chromium"
-$code = Invoke-PyExe -Exe $PyExe -Args @("-m", "playwright", "install", "chromium") `
-  -HeartbeatPct 74 -HeartbeatLabel "Installing Chromium"
-if ($code -ne 0) { Write-Log "!! playwright chromium install failed (browser login may be unavailable)" }
+# Playwright browser binary — OPTIONAL on first boot.
+# App defaults to system Chrome (script.cloud.browser.channel=chrome).
+# Downloading Chromium here often takes 10-30+ minutes and looks like a hang.
+Write-ProgressLine 72 "Skip Playwright Chromium (use system Chrome; install later if needed)"
+Write-Log "==> skip: playwright install chromium (first-boot). Use Chrome channel; run later: python -m playwright install chromium"
 
-# Optional rembg - never block startup
-Write-ProgressLine 80 "Optional packages"
-$probeRembg = Join-Path $RuntimeRoot "_probe_rembg.py"
-@'
-import sys
-try:
-    import rembg  # noqa: F401
-    print("OK rembg")
-    sys.exit(0)
-except Exception as e:
-    print("MISSING rembg:%s" % e.__class__.__name__)
-    sys.exit(1)
-'@ | Set-Content -Path $probeRembg -Encoding ASCII
-$code = Invoke-PyExe -Exe $PyExe -Args @($probeRembg)
-Remove-Item $probeRembg -Force -ErrorAction SilentlyContinue
-if ($code -eq 0) {
-  Write-Log "==> rembg already present, skip"
-} else {
-  Write-Log "==> optional: rembg"
-  $code = Invoke-PyExe -Exe $PyExe -Args @(
-    "-m", "pip", "install", "rembg[cpu]>=2.0.50",
-    "-i", $PipMirror, "--trusted-host", $PipHost
-  ) -HeartbeatPct 82 -HeartbeatLabel "Installing rembg"
-  if ($code -ne 0) { Write-Log "!! rembg skipped" }
-}
+# rembg is optional (cover subject cutout). Skip on first boot — huge deps (onnx/scipy).
+Write-ProgressLine 80 "Skip optional rembg (install later from settings if needed)"
+Write-Log "==> skip: rembg[cpu] on first-boot (optional; large download)"
 
 # --- FFmpeg: prefer PATH ---
 Write-ProgressLine 88 "Check FFmpeg"
