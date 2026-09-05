@@ -88,17 +88,37 @@ def transcribe_whisper(
     return text
 
 
+def _funasr_roots(cfg: dict) -> list[Path]:
+    """Candidate FunASR install dirs (config + runtime engines)."""
+    roots: list[Path] = []
+    configured = Path(cfg.get("paths", {}).get("funasr_dir", "tools/FunASR"))
+    roots.append(configured)
+    rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
+    if rt:
+        roots.append(Path(rt) / "engines" / "FunASR")
+    roots.append(Path("tools/FunASR"))
+    out: list[Path] = []
+    seen: set[str] = set()
+    for r in roots:
+        key = str(r).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
 def _funasr_python_candidates(cfg: dict) -> list[str]:
     """Ordered python interpreters that may host FunASR."""
-    root = Path(cfg.get("paths", {}).get("funasr_dir", "tools/FunASR"))
     out: list[str] = []
-    for sub in (".venv", "venv"):
-        win = root / sub / "Scripts" / "python.exe"
-        if win.exists():
-            out.append(str(win.resolve()))
-        unix = root / sub / "bin" / "python"
-        if unix.exists():
-            out.append(str(unix.resolve()))
+    for root in _funasr_roots(cfg):
+        for sub in (".venv", "venv"):
+            win = root / sub / "Scripts" / "python.exe"
+            if win.exists():
+                out.append(str(win.resolve()))
+            unix = root / sub / "bin" / "python"
+            if unix.exists():
+                out.append(str(unix.resolve()))
     out.append(sys.executable)
     # de-dupe preserving order
     seen: set[str] = set()
@@ -113,19 +133,19 @@ def _funasr_python_candidates(cfg: dict) -> list[str]:
 
 
 def _python_has_funasr(py: str) -> bool:
-    """Require funasr + torch (AutoModel needs torch; bare import is not enough)."""
+    """Fast readiness: package present (avoid full torch import — can take minutes)."""
     try:
-        # Fail fast when torch is missing (broken FunASR venv).
         result = subprocess.run(
             [
                 py,
                 "-c",
                 "import importlib.util as u;"
                 "assert u.find_spec('torch'), 'no torch';"
-                "import torch, funasr",
+                "assert u.find_spec('funasr'), 'no funasr';"
+                "print('OK')",
             ],
             capture_output=True,
-            timeout=60,
+            timeout=45,
         )
         return result.returncode == 0
     except Exception:
@@ -195,6 +215,19 @@ def _write_and_read_asr_out(cmd: list[str], *, cwd: Path, env: dict, out_path: P
     return stdout
 
 
+def _resolve_funasr_dir(cfg: dict) -> Path:
+    """Prefer a FunASR dir that has run_asr.py + venv."""
+    for root in _funasr_roots(cfg):
+        if (root / "run_asr.py").is_file() and any(
+            (root / sub).is_dir() for sub in (".venv", "venv")
+        ):
+            return root
+    for root in _funasr_roots(cfg):
+        if any((root / sub).is_dir() for sub in (".venv", "venv")):
+            return root
+    return _funasr_roots(cfg)[0]
+
+
 def transcribe_funasr(
     cfg: dict,
     wav_path: Path,
@@ -202,17 +235,15 @@ def transcribe_funasr(
     on_progress: ProgressFn | None = None,
 ) -> str:
     script_cfg = cfg.get("script") or {}
-    funasr_dir = Path(cfg.get("paths", {}).get("funasr_dir", "tools/FunASR"))
+    funasr_dir = _resolve_funasr_dir(cfg)
     runner = funasr_dir / "run_asr.py"
     if not runner.exists():
         raise FileNotFoundError(f"FunASR runner 缺失: {runner}")
     if not _funasr_available(cfg):
         raise RuntimeError(
             "FunASR 未就绪（需要 funasr + torch）。\n"
-            "请运行：\n"
-            "  .\\scripts\\setup\\setup_funasr.ps1\n"
-            "或在 FunASR 虚拟环境中安装：\n"
-            "  tools\\FunASR\\.venv\\Scripts\\python.exe -m pip install torch torchaudio"
+            "请到 设置 → 本机环境 重新安装 FunASR，或运行：\n"
+            "  .\\scripts\\setup\\setup_funasr.ps1"
         )
 
     model = script_cfg.get("funasr_model", "sensevoice")

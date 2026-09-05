@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { useJobQueue } from '../context/JobQueueContext'
 import { AlertModal, parseApiError } from './AlertModal'
@@ -84,18 +84,27 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
     void load()
   }, [open, load])
 
-  // Auto-refresh engine status when install jobs finish
+  // Auto-refresh once per finished install (do not re-alert when load/onRefresh identity changes)
+  const seenInstallTick = useRef(0)
   useEffect(() => {
     const fin = jobQueue.lastFinished
-    if (!fin || fin.type !== 'engine_install') return
+    const tick = jobQueue.completionTick
+    if (!fin || fin.type !== 'engine_install' || tick <= 0) return
+    if (seenInstallTick.current === tick) return
+    seenInstallTick.current = tick
     void load().then(() => onRefresh?.())
     if (fin.status === 'done') {
       const ready = fin.result?.ready !== false
+      const missing = Array.isArray(fin.result?.missing)
+        ? (fin.result.missing as string[]).slice(0, 3).map((m) => `· ${m}`).join('\n')
+        : ''
       setAlert({
         title: ready ? '安装完成' : '安装已结束',
         message: ready
           ? `「${fin.title}」已完成，设置中的引擎状态已更新。`
-          : `「${fin.title}」脚本已跑完，但引擎尚未完全就绪。请到任务中心查看日志。`,
+          : `「${fin.title}」脚本已跑完，但引擎尚未完全就绪。${
+              missing ? `\n\n${missing}\n\n` : '\n\n'
+            }请到任务中心查看日志；可再点一次安装修复依赖。`,
         variant: ready ? 'success' : 'info',
       })
     } else if (fin.status === 'failed') {

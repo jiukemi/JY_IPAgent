@@ -201,31 +201,36 @@ def _whisper_status(cfg: dict) -> dict:
 
 
 def _funasr_status(cfg: dict) -> dict:
-    from script.extract import _funasr_python
+    from script.extract import _funasr_roots, _python_has_funasr
 
     missing: list[str] = []
-    # Fast path: no dedicated FunASR venv → not installed (skip 60s import probe on main Python).
-    import sys
-
-    py = _funasr_python(cfg)
-    root = Path(cfg.get("paths", {}).get("funasr_dir", "tools/FunASR"))
-    if not root.is_absolute():
-        root = ROOT / root
-    has_venv = any((root / sub).is_dir() for sub in (".venv", "venv"))
-    if not has_venv and py == sys.executable:
-        missing.append("FunASR 未安装（运行 scripts/setup/setup_funasr.ps1）")
+    roots = _funasr_roots(cfg)
+    venv_py = None
+    for root in roots:
+        for sub in (".venv", "venv"):
+            cand = root / sub / ("Scripts" if os.name == "nt" else "bin") / (
+                "python.exe" if os.name == "nt" else "python"
+            )
+            if cand.is_file():
+                venv_py = str(cand.resolve())
+                break
+        if venv_py:
+            break
+    if not venv_py:
+        missing.append("FunASR 未安装（设置里一键安装，或运行 scripts/setup/setup_funasr.ps1）")
         return {"installed": False, "ready": False, "preset_ready": False, "missing": missing}
-
-    from script.extract import _funasr_available
 
     ok = False
     try:
-        ok = bool(_funasr_available(cfg))
+        ok = bool(_python_has_funasr(venv_py))
     except Exception:
         ok = False
     if not ok:
-        missing.append("FunASR 未安装（运行 scripts/setup/setup_funasr.ps1）")
-    return {"installed": ok, "ready": ok, "preset_ready": ok, "missing": missing}
+        missing.append(
+            "FunASR 依赖不完整（需 funasr + torch）；请重新点安装"
+        )
+        return {"installed": True, "ready": False, "preset_ready": False, "missing": missing}
+    return {"installed": True, "ready": True, "preset_ready": True, "missing": []}
 
 
 def _ffmpeg_status(_cfg: dict) -> dict:

@@ -61,8 +61,13 @@ def shutdown_funasr_worker() -> None:
 
 
 def _start_worker(cfg: dict) -> subprocess.Popen:
+    from script.extract import _resolve_funasr_dir
+
     py = _funasr_python(cfg)
-    worker_script = ROOT / "tools" / "FunASR" / "worker.py"
+    fun_dir = _resolve_funasr_dir(cfg)
+    worker_script = fun_dir / "worker.py"
+    if not worker_script.is_file():
+        worker_script = ROOT / "tools" / "FunASR" / "worker.py"
     model = worker_model(cfg)
     cmd = [py, "-u", str(worker_script), "--model", model]
     import os as _os
