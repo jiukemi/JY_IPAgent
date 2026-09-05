@@ -98,9 +98,41 @@ def build_tts_text(
     return f"{prefix}{text}"
 
 
+def _ensure_edge_tts() -> None:
+    """Install edge-tts into the current interpreter if missing (Aliyun mirror)."""
+    import subprocess
+    import sys
+
+    mirrors = [
+        ["-i", "https://mirrors.aliyun.com/pypi/simple/", "--trusted-host", "mirrors.aliyun.com"],
+        [],
+    ]
+    last_err = ""
+    for extra in mirrors:
+        cmd = [sys.executable, "-m", "pip", "install", "edge-tts>=6.1.0", *extra]
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            if r.returncode == 0:
+                return
+            last_err = (r.stderr or r.stdout or "").strip()[-400:]
+        except Exception as exc:
+            last_err = str(exc)
+    raise RuntimeError(
+        "未安装 edge-tts（在线 Edge 配音依赖）。自动安装失败：\n"
+        f"{last_err or 'unknown'}\n"
+        "请在运行时 Python 执行：python -m pip install edge-tts\n"
+        "或清除运行时后重开软件（会重装核心依赖）。"
+    )
+
+
 def run_edge_tts(text: str, output_mp3: Path, voice: str) -> Path:
     import asyncio
-    import edge_tts
+
+    try:
+        import edge_tts
+    except ImportError:
+        _ensure_edge_tts()
+        import edge_tts
 
     async def _run() -> None:
         communicate = edge_tts.Communicate(text, voice)

@@ -135,7 +135,17 @@ def _piper_status(cfg: dict) -> dict:
 
 
 def _edge_status(_cfg: dict) -> dict:
-    return {"installed": True, "ready": True, "preset_ready": True, "missing": []}
+    try:
+        import edge_tts  # noqa: F401
+
+        return {"installed": True, "ready": True, "preset_ready": True, "missing": []}
+    except ImportError:
+        return {
+            "installed": False,
+            "ready": False,
+            "preset_ready": False,
+            "missing": ["edge-tts 未安装（首次在线配音会尝试自动安装，或清除运行时后重开）"],
+        }
 
 
 def _qwen3_status(cfg: dict) -> dict:

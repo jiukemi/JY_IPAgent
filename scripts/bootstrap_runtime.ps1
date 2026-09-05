@@ -400,7 +400,7 @@ Write-ProgressLine 55 "Check core packages"
 $probePy = Join-Path $RuntimeRoot "_probe_core.py"
 @'
 import sys
-mods = ("fastapi", "uvicorn", "yaml", "PIL", "playwright")
+mods = ("fastapi", "uvicorn", "yaml", "PIL", "playwright", "edge_tts")
 missing = []
 for m in mods:
     try:
