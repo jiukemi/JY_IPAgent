@@ -106,6 +106,40 @@ def _installer_looks_valid(path: Path) -> bool:
         return False
 
 
+def _normalize_installer_path(installer: Path) -> Path:
+    """Copy installer to a no-space path so cmd.exe / UAC never break on spaces.
+
+    Official name is ``Docker Desktop Installer.exe``; Downloads folders may also
+    contain spaces (e.g. ``C:\\Users\\Foo Bar\\Downloads\\...``).
+    """
+    src = installer.expanduser().resolve()
+    if not _installer_looks_valid(src):
+        raise RuntimeError(f"安装包无效或不完整：{src}")
+    dest = _installer_cache_path()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    # Already the cache file and name has no spaces
+    try:
+        if src.resolve() == dest.resolve():
+            return dest
+    except OSError:
+        pass
+    need_copy = (" " in str(src)) or (src.name != dest.name) or (not dest.is_file())
+    if need_copy:
+        # Skip copy if same size already cached (resume-friendly)
+        try:
+            if dest.is_file() and dest.stat().st_size == src.stat().st_size:
+                return dest
+        except OSError:
+            pass
+        _set_docker_install(
+            message=f"安装包文件名含空格或路径含空格，正在复制到无空格路径：{dest.name}…",
+        )
+        shutil.copy2(src, dest)
+    if not _installer_looks_valid(dest):
+        raise RuntimeError(f"复制安装包失败：{dest}")
+    return dest
+
+
 def find_local_docker_installers() -> list[dict[str, Any]]:
     """Scan common folders for Docker Desktop Installer.exe (no network)."""
     homes: list[Path] = []
@@ -241,6 +275,8 @@ def _download_docker_installer(dest: Path) -> None:
 
 def _write_docker_install_cmd(installer: Path, install_root: Path) -> Path:
     """Write a .cmd that runs the installer with custom dirs (UAC-friendly)."""
+    # Always use no-space path — official "Docker Desktop Installer.exe" breaks cmd quoting.
+    installer = _normalize_installer_path(installer)
     app_dir = install_root / "DockerDesktop"
     wsl_root = install_root / "wsl"
     win_root = install_root / "windows-containers"
@@ -249,22 +285,18 @@ def _write_docker_install_cmd(installer: Path, install_root: Path) -> Path:
     cache = _installer_cache_path().parent
     cache.mkdir(parents=True, exist_ok=True)
     cmd_path = cache / "install_docker_custom_drive.cmd"
-    # cmd.exe quoting: "" inside quoted paths
-    def _cq(s: str) -> str:
-        return '"' + str(s).replace('"', "") + '"'
 
+    # Paths here have no spaces by design (D:\Docker\..., DockerDesktopInstaller.exe).
+    exe = str(installer)
+    app_s, wsl_s, win_s = str(app_dir), str(wsl_root), str(win_root)
     lines = [
         "@echo off",
         "chcp 65001 >nul",
+        "setlocal",
         "echo Installing Docker Desktop to custom drive...",
-        "echo Installer: " + str(installer),
-        "echo Target: " + str(install_root),
-        (
-            f'{_cq(str(installer))} install --accept-license '
-            f'--installation-dir={app_dir} '
-            f'--wsl-default-data-root={wsl_root} '
-            f'--windows-containers-default-data-root={win_root}'
-        ),
+        f"echo Installer: {exe}",
+        f"echo Target: {install_root}",
+        f'"{exe}" install --accept-license --installation-dir={app_s} --wsl-default-data-root={wsl_s} --windows-containers-default-data-root={win_s}',
         "set ERR=%ERRORLEVEL%",
         "if not %ERR%==0 (",
         "  echo Install failed, exit=%ERR%",
@@ -381,16 +413,26 @@ def prepare_docker_desktop_install(
         }
 
     install_root = root / "Docker"
-    cmd_path = _write_docker_install_cmd(installer, install_root)
+    try:
+        cmd_path = _write_docker_install_cmd(installer, install_root)
+        # Prefer the normalized (no-space) installer path for Electron / display
+        normalized = _normalize_installer_path(installer)
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"准备安装失败：{exc}"}
     return {
         "ok": True,
         "drive": letter,
-        "installer": str(installer),
+        "installer": str(normalized),
         "install_root": str(install_root),
         "cmd_path": str(cmd_path),
         "message": (
-            f"已准备安装到 {install_root}。接下来会弹出管理员确认，请点「是」。"
-            "若没看到窗口，请看任务栏是否有盾牌图标闪烁。"
+            f"已准备安装到 {install_root}。"
+            + (
+                "（已将带空格的「Docker Desktop Installer.exe」复制为无空格文件名再安装。）"
+                if " " in str(installer)
+                else ""
+            )
+            + "接下来会弹出管理员确认，请点「是」。若没看到窗口，请看任务栏盾牌图标是否闪烁。"
         ),
     }
 

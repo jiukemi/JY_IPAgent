@@ -131,7 +131,7 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
       setAlert({
         title: '需要先有安装包',
         message:
-          '国内直连官网经常下到一半失败。请先用浏览器/网盘下载「Docker Desktop Installer.exe」到下载文件夹，点「扫描本机安装包」，或粘贴完整路径后再安装。',
+                    '国内直连官网经常下到一半失败。请先用浏览器/网盘下载「Docker Desktop Installer.exe」到下载文件夹，点「扫描本机安装包」，或粘贴完整路径后再安装。文件名带空格没关系，软件会自动复制成无空格路径再装。',
         variant: 'warning',
       })
       return
