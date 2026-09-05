@@ -1205,6 +1205,7 @@ export const api = {
       installer?: string
       install_root?: string
       cmd_path?: string
+      args?: string[]
       local_installers?: Array<{ path: string; name: string; label: string; size_gb?: number }>
       docker_install?: {
         phase?: string

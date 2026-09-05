@@ -1021,15 +1021,29 @@ function registerSplashIpc() {
     const input = typeof rawPath === 'string' ? rawPath.trim() : ''
     if (!input) return { ok: false, message: '路径为空' }
     const resolved = path.resolve(input)
+    const localApp = process.env.LOCALAPPDATA || ''
     const allowed = [
       path.join(ROOT, 'data'),
       path.join(runtimeDir(), 'data'),
-    ].map((p) => path.resolve(p))
+      localApp ? path.join(localApp, 'JY_IPAgent') : '',
+      os.tmpdir(),
+    ]
+      .filter(Boolean)
+      .map((p) => path.resolve(p))
     const okRoot = allowed.some(
       (root) => resolved === root || resolved.startsWith(root + path.sep),
     )
-    if (!okRoot) return { ok: false, message: '只能打开本机数据目录内的文件' }
+    if (!okRoot) return { ok: false, message: '只能打开本机数据 / 安装脚本目录内的文件' }
     if (!fs.existsSync(resolved)) return { ok: false, message: '文件不存在' }
+    // If it's a file, reveal in Explorer; if dir, open it
+    try {
+      if (fs.statSync(resolved).isFile()) {
+        spawn('explorer.exe', [`/select,${resolved}`], { windowsHide: true, detached: true, stdio: 'ignore' })
+        return { ok: true }
+      }
+    } catch {
+      /* fall through */
+    }
     const err = await shell.openPath(resolved)
     if (err) return { ok: false, message: err }
     return { ok: true }
@@ -1038,38 +1052,116 @@ function registerSplashIpc() {
   ipcMain.handle('desktop:elevate-docker-install', async (_e, payload) => {
     const installer = typeof payload?.installer === 'string' ? payload.installer.trim() : ''
     const cmdPath = typeof payload?.cmd_path === 'string' ? payload.cmd_path.trim() : ''
-    const target = cmdPath || installer
-    if (!target || !fs.existsSync(target)) {
-      return { ok: false, message: '安装脚本或安装包不存在' }
+    const installRoot = typeof payload?.install_root === 'string' ? payload.install_root.trim() : ''
+    const args = Array.isArray(payload?.args) ? payload.args.map(String) : []
+
+    // Prefer elevating the .exe directly (RunAs on .cmd is flaky). Fallback to .cmd via cmd.exe.
+    const exe = installer && fs.existsSync(installer) ? installer : ''
+    const script = cmdPath && fs.existsSync(cmdPath) ? cmdPath : ''
+    if (!exe && !script) {
+      return { ok: false, message: '安装包或安装脚本不存在（路径无效）。' }
     }
-    // Elevate from Electron main (interactive desktop) so UAC actually appears.
-    const ps = `
+
+    const ps1 = path.join(os.tmpdir(), `jy-elevate-docker-${Date.now()}.ps1`)
+    let psBody = ''
+    if (exe && args.length >= 1) {
+      // Direct: DockerDesktopInstaller.exe install --accept-license ...
+      const argList = args.map((a) => `'${String(a).replace(/'/g, "''")}'`).join(',')
+      psBody = `
 $ErrorActionPreference = 'Stop'
-$p = Start-Process -FilePath ${JSON.stringify(target)} -Verb RunAs -PassThru
-if ($null -eq $p) { exit 2 }
-Write-Output ("PID=" + $p.Id)
-exit 0
+$exe = ${JSON.stringify(exe)}
+$arg = @(${argList})
+$p = Start-Process -FilePath $exe -ArgumentList $arg -Verb RunAs -PassThru
+if ($null -eq $p) { throw 'UAC cancelled' }
+Write-Output ('PID=' + $p.Id)
 `
-    try {
-      const out = execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command ${JSON.stringify(ps)}`, {
-        windowsHide: false,
-        timeout: 120000,
-        encoding: 'utf8',
-      })
-      return {
-        ok: true,
-        message:
-          '已弹出管理员确认（若没看到请看任务栏闪烁的盾牌图标）。请点「是」继续安装。',
-        detail: String(out || '').trim(),
-      }
-    } catch (e) {
-      return {
-        ok: false,
-        message:
-          `未能弹出管理员安装：${e instanceof Error ? e.message : String(e)}。` +
-          '请右键安装包「以管理员身份运行」，或检查是否点了 UAC「否」。',
-      }
+    } else if (exe && installRoot) {
+      const appDir = path.join(installRoot, 'DockerDesktop')
+      const wslRoot = path.join(installRoot, 'wsl')
+      const winRoot = path.join(installRoot, 'windows-containers')
+      psBody = `
+$ErrorActionPreference = 'Stop'
+$exe = ${JSON.stringify(exe)}
+$arg = @(
+  'install',
+  '--accept-license',
+  ${JSON.stringify(`--installation-dir=${appDir}`)},
+  ${JSON.stringify(`--wsl-default-data-root=${wslRoot}`)},
+  ${JSON.stringify(`--windows-containers-default-data-root=${winRoot}`)}
+)
+$p = Start-Process -FilePath $exe -ArgumentList $arg -Verb RunAs -PassThru
+if ($null -eq $p) { throw 'UAC cancelled' }
+Write-Output ('PID=' + $p.Id)
+`
+    } else {
+      // .cmd via cmd.exe /c — more reliable than RunAs on the .cmd file itself
+      psBody = `
+$ErrorActionPreference = 'Stop'
+$cmd = ${JSON.stringify(script)}
+$p = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/c', $cmd) -Verb RunAs -PassThru
+if ($null -eq $p) { throw 'UAC cancelled' }
+Write-Output ('PID=' + $p.Id)
+`
     }
+
+    try {
+      fs.writeFileSync(ps1, psBody, 'utf8')
+    } catch (e) {
+      return { ok: false, message: `无法写入提权脚本：${e instanceof Error ? e.message : String(e)}` }
+    }
+
+    return await new Promise((resolve) => {
+      const child = spawn(
+        'powershell.exe',
+        ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1],
+        { windowsHide: false, stdio: ['ignore', 'pipe', 'pipe'] },
+      )
+      let out = ''
+      let err = ''
+      child.stdout?.on('data', (c) => {
+        out += c.toString()
+      })
+      child.stderr?.on('data', (c) => {
+        err += c.toString()
+      })
+      child.on('error', (e) => {
+        try {
+          fs.unlinkSync(ps1)
+        } catch {
+          /* ignore */
+        }
+        resolve({
+          ok: false,
+          message: `无法启动提权过程：${e.message}`,
+          cmd_path: script || '',
+        })
+      })
+      child.on('exit', (code) => {
+        try {
+          fs.unlinkSync(ps1)
+        } catch {
+          /* ignore */
+        }
+        if (code === 0) {
+          resolve({
+            ok: true,
+            message:
+              '已请求管理员权限。请在「用户账户控制」窗口点「是」（也可能在任务栏闪烁）。点「是」后开始往所选盘安装。',
+            detail: out.trim(),
+            cmd_path: script || '',
+          })
+          return
+        }
+        const detail = (err || out || '').trim().slice(0, 400)
+        resolve({
+          ok: false,
+          message:
+            '安装包已经找到了，但「管理员确认」没有通过（可能点了「否」，或系统拦截了提权）。' +
+            (detail ? `\n详情：${detail}` : ''),
+          cmd_path: script || '',
+        })
+      })
+    })
   })
 }
 

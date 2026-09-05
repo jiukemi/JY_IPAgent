@@ -425,14 +425,21 @@ def prepare_docker_desktop_install(
         "installer": str(normalized),
         "install_root": str(install_root),
         "cmd_path": str(cmd_path),
+        "args": [
+            "install",
+            "--accept-license",
+            f"--installation-dir={install_root / 'DockerDesktop'}",
+            f"--wsl-default-data-root={install_root / 'wsl'}",
+            f"--windows-containers-default-data-root={install_root / 'windows-containers'}",
+        ],
         "message": (
-            f"已准备安装到 {install_root}。"
+            f"已准备好安装包（{normalized.name}）→ 将装到 {install_root}。"
             + (
-                "（已将带空格的「Docker Desktop Installer.exe」复制为无空格文件名再安装。）"
+                "（原文件名带空格，已复制为无空格文件。）"
                 if " " in str(installer)
                 else ""
             )
-            + "接下来会弹出管理员确认，请点「是」。若没看到窗口，请看任务栏盾牌图标是否闪烁。"
+            + "下一步需要管理员权限。"
         ),
     }
 

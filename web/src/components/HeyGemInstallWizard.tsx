@@ -145,7 +145,9 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
             elevateDockerInstall?: (p: {
               installer?: string
               cmd_path?: string
-            }) => Promise<{ ok: boolean; message?: string }>
+              install_root?: string
+              args?: string[]
+            }) => Promise<{ ok: boolean; message?: string; cmd_path?: string }>
           }
         }
       ).agentDesktop
@@ -165,18 +167,43 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
         const elev = await desktop.elevateDockerInstall({
           installer: prep.installer,
           cmd_path: prep.cmd_path,
+          install_root: prep.install_root,
+          args: prep.args,
         })
         push(elev.message || '')
-        setAlert({
-          title: elev.ok ? '请确认管理员权限' : '未能弹出管理员确认',
-          message:
-            (elev.message || '') +
-            (prep.install_root ? `\n\n目标目录：${prep.install_root}` : '') +
-            (elev.ok
-              ? '\n\n点「是」后等待安装完成；装好后打开 Docker，再点「重新检测」。'
-              : `\n\n可手动右键以管理员运行：\n${prep.cmd_path}`),
-          variant: elev.ok ? 'info' : 'warning',
-        })
+        if (elev.ok) {
+          setAlert({
+            title: '请点「是」允许安装',
+            message:
+              `${elev.message || ''}\n\n` +
+              `安装包：${prep.installer || installerPath}\n` +
+              `目标盘：${prep.install_root || installDrive}\n\n` +
+              '装完后打开 Docker Desktop，登录可跳过，再回本向导点「重新检测」。',
+            variant: 'info',
+          })
+        } else {
+          const manual = elev.cmd_path || prep.cmd_path || ''
+          setAlert({
+            title: '需要你手动点一次管理员权限',
+            message:
+              `安装包位置已经识别好了，不是没找到文件。\n` +
+              `是「用管理员身份启动安装」这一步没成功（常见：点了「否」，或安全软件拦截）。\n\n` +
+              `${elev.message || ''}\n\n` +
+              `请到文件夹里，右键下面这个文件 →「以管理员身份运行」：\n${manual}\n\n` +
+              `装到：${prep.install_root || installDrive}`,
+            variant: 'warning',
+          })
+          // Best-effort：打开脚本所在文件夹，方便小白右键
+          try {
+            await (
+              window as unknown as {
+                agentDesktop?: { openPath?: (p: string) => Promise<unknown> }
+              }
+            ).agentDesktop?.openPath?.(manual)
+          } catch {
+            /* ignore */
+          }
+        }
         await refresh()
         return
       }
