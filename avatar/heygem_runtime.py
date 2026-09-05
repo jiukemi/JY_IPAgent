@@ -103,8 +103,9 @@ def heygem_service_status(cfg: dict) -> dict:
         elif present and docker_cli and not docker_ok:
             hint = (
                 "本机已有 Duix 部署目录（算已下载），但 Docker Desktop 引擎未就绪："
-                "客户端存在却无法执行 docker info。"
-                "请打开 Docker Desktop，等到状态正常后再点「一键启动」或运行 .\\scripts\\setup\\setup_heygem.ps1。"
+                "客户端存在却无法执行 docker info（验收只看这个，不必注册 Docker Hub）。"
+                "请打开 Docker Desktop，跳过登录窗，等到托盘就绪后再点「一键启动」"
+                "或运行 .\\scripts\\setup\\setup_heygem.ps1。"
             )
             state = "docker_engine_down"
         elif present and not docker_cli:

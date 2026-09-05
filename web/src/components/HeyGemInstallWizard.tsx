@@ -30,6 +30,26 @@ type WizardState = {
   steps: WizardStep[]
   current_step: number
   docker_product_url?: string
+  docker_installer_url?: string
+  docker_acceptance_note?: string
+  install_drives?: Array<{
+    letter: string
+    root: string
+    free_bytes: number
+    free_gb: number
+    total_gb: number
+    recommended?: boolean
+    enough_space?: boolean
+    default?: boolean
+    label: string
+  }>
+  docker_install?: {
+    phase?: string
+    message?: string
+    drive?: string
+    install_root?: string
+    progress_pct?: number
+  }
   tars?: Array<{ family: string; name: string; path: string; bytes: number }>
   image_loaded?: boolean
   can_load?: boolean
@@ -49,6 +69,7 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
   const [localPath, setLocalPath] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [open, setOpen] = useState(true)
+  const [installDrive, setInstallDrive] = useState('')
   const [alert, setAlert] = useState<{
     title: string
     message: string
@@ -60,6 +81,12 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
       const s = await api.heygemWizard()
       setWiz(s)
       onReadyChange?.(!!s.heygem?.ready)
+      setInstallDrive((prev) => {
+        if (prev) return prev
+        const def = s.install_drives?.find((d) => d.default)?.letter
+        const fallback = s.install_drives?.find((d) => d.enough_space)?.letter
+        return def || fallback || s.install_drives?.[0]?.letter || ''
+      })
     } catch (e) {
       setLog((prev) => [...prev.slice(-40), e instanceof Error ? e.message : String(e)])
     }
@@ -69,14 +96,46 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
     void refresh()
   }, [refresh])
 
+  const dockerPhase = wiz?.docker_install?.phase || 'idle'
+  const dockerInstalling = dockerPhase === 'downloading' || dockerPhase === 'elevating'
+
+  useEffect(() => {
+    if (!dockerInstalling) return
+    const id = window.setInterval(() => void refresh(), 2000)
+    return () => window.clearInterval(id)
+  }, [dockerInstalling, refresh])
+
   const push = (line: string) => setLog((prev) => [...prev.slice(-50), line])
+
+  const installDockerToDrive = async () => {
+    if (!installDrive) {
+      setAlert({ title: '请选择磁盘', message: '请先选择要把 Docker 装到哪一块盘。', variant: 'warning' })
+      return
+    }
+    setBusy('安装 Docker')
+    try {
+      const r = await api.heygemWizardInstallDocker({ drive: installDrive })
+      push(r.message)
+      setAlert({
+        title: r.ok ? '正在安装 Docker' : '无法开始安装',
+        message: r.message,
+        variant: r.ok ? 'info' : 'warning',
+      })
+      await refresh()
+    } catch (e) {
+      const { title, message } = parseApiError(e, '安装失败')
+      setAlert({ title, message, variant: 'error' })
+    } finally {
+      setBusy('')
+    }
+  }
 
   const openDocker = async () => {
     setBusy('打开下载页')
     try {
       const r = await api.heygemWizardOpenDocker()
       push(r.message)
-      setAlert({ title: 'Docker Desktop', message: r.message, variant: 'info' })
+      setAlert({ title: '备用下载', message: r.message, variant: 'info' })
     } catch (e) {
       const { title, message } = parseApiError(e, '打开失败')
       setAlert({ title, message, variant: 'error' })
@@ -266,19 +325,48 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
             {!wiz.steps[1]?.done && (
               <div className="mt-3 space-y-2 rounded-lg border border-[var(--border)] p-2.5">
                 <p className="text-[11px] font-medium text-[var(--text)]">② Docker Desktop</p>
-                <p className="text-[10px] text-[var(--muted)]">
-                  需管理员安装，完成后可能要重启。装好后打开 Docker，托盘图标正常再继续。本地 load
-                  镜像一般不必注册 Docker Hub。
+                <p className="text-[10px] leading-relaxed text-[var(--muted)]">
+                  {wiz.docker_acceptance_note ||
+                    '验收：docker info 成功即可（通常无需注册）。请用下方选盘一键安装——官网图形安装只会装 C 盘。'}
                 </p>
-                <div className="flex flex-wrap gap-2">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-[10px] text-[var(--muted)]" htmlFor="docker-install-drive">
+                    安装到
+                  </label>
+                  <select
+                    id="docker-install-drive"
+                    value={installDrive}
+                    disabled={!!busy || dockerInstalling}
+                    onChange={(e) => setInstallDrive(e.target.value)}
+                    className="rounded-lg border border-[var(--border)] bg-[var(--bg)] px-2 py-1.5 text-xs text-[var(--text)] disabled:opacity-40"
+                  >
+                    {(wiz.install_drives || []).map((d) => (
+                      <option key={d.letter} value={d.letter} disabled={!d.enough_space}>
+                        {d.label}
+                        {d.recommended ? ' · 推荐' : ''}
+                        {!d.enough_space ? ' · 空间不足' : ''}
+                      </option>
+                    ))}
+                  </select>
                   <button
                     type="button"
-                    disabled={!!busy}
-                    onClick={() => void openDocker()}
+                    disabled={!!busy || dockerInstalling || !installDrive}
+                    onClick={() => void installDockerToDrive()}
                     className="btn-primary rounded-lg px-3 py-1.5 text-xs font-semibold disabled:opacity-40"
                   >
-                    打开官网下载
+                    {dockerInstalling ? '安装进行中…' : '一键安装到所选盘'}
                   </button>
+                </div>
+                {(wiz.docker_install?.message || dockerInstalling) && (
+                  <p className="text-[10px] text-[var(--muted)]">
+                    {wiz.docker_install?.message}
+                    {typeof wiz.docker_install?.progress_pct === 'number' &&
+                    dockerPhase === 'downloading'
+                      ? `（${wiz.docker_install.progress_pct}%）`
+                      : ''}
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-2">
                   <button
                     type="button"
                     disabled={!!busy}
@@ -294,6 +382,14 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
                     className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs hover:bg-[var(--panel)]"
                   >
                     重新检测
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!!busy || dockerInstalling}
+                    onClick={() => void openDocker()}
+                    className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-[10px] text-[var(--muted)] hover:bg-[var(--panel)] disabled:opacity-40"
+                  >
+                    备用：打开官网（默认 C 盘）
                   </button>
                 </div>
               </div>

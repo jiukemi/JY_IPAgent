@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
+import threading
+import time
+import urllib.request
 import webbrowser
 from pathlib import Path
 from typing import Any
@@ -22,6 +26,251 @@ DOCKER_INSTALLER_URL = (
     "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe"
 )
 DOCKER_PRODUCT_URL = "https://www.docker.com/products/docker-desktop/"
+# WSL data + images grow fast; warn below this free space.
+_MIN_FREE_BYTES = 25 * 1024 * 1024 * 1024
+
+_DOCKER_INSTALL_LOCK = threading.Lock()
+_DOCKER_INSTALL: dict[str, Any] = {
+    "phase": "idle",  # idle | downloading | elevating | launched | error | done
+    "message": "",
+    "drive": "",
+    "install_root": "",
+    "progress_pct": 0,
+    "updated_at": 0.0,
+}
+
+
+def _set_docker_install(**kwargs: Any) -> None:
+    with _DOCKER_INSTALL_LOCK:
+        _DOCKER_INSTALL.update(kwargs)
+        _DOCKER_INSTALL["updated_at"] = time.time()
+
+
+def docker_install_progress() -> dict[str, Any]:
+    with _DOCKER_INSTALL_LOCK:
+        return dict(_DOCKER_INSTALL)
+
+
+def list_install_drives() -> list[dict[str, Any]]:
+    """Fixed/local drives for Docker install picker (Windows)."""
+    out: list[dict[str, Any]] = []
+    if os.name != "nt":
+        return out
+    for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+        root = Path(f"{letter}:\\")
+        if not root.exists():
+            continue
+        try:
+            usage = shutil.disk_usage(str(root))
+        except OSError:
+            continue
+        free = int(usage.free)
+        total = int(usage.total)
+        out.append(
+            {
+                "letter": f"{letter}:",
+                "root": str(root),
+                "free_bytes": free,
+                "total_bytes": total,
+                "free_gb": round(free / (1024**3), 1),
+                "total_gb": round(total / (1024**3), 1),
+                "recommended": free >= _MIN_FREE_BYTES and letter != "C",
+                "enough_space": free >= _MIN_FREE_BYTES,
+                "label": f"{letter}:（剩余约 {round(free / (1024**3), 1)} GB）",
+            }
+        )
+    # Prefer non-C with most free space as default hint
+    preferred = sorted(
+        (d for d in out if d["letter"] != "C:" and d["enough_space"]),
+        key=lambda d: d["free_bytes"],
+        reverse=True,
+    )
+    if preferred:
+        for d in out:
+            d["default"] = d["letter"] == preferred[0]["letter"]
+    elif out:
+        for d in out:
+            d["default"] = d["letter"] == "C:"
+    return out
+
+
+def _installer_cache_path() -> Path:
+    base = Path(os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or ".")
+    return base / "JY_IPAgent" / "DockerDesktopInstaller.exe"
+
+
+def _download_docker_installer(dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".partial")
+    if tmp.is_file():
+        tmp.unlink(missing_ok=True)
+
+    def _reporthook(block_num: int, block_size: int, total_size: int) -> None:
+        if total_size <= 0:
+            return
+        done = min(block_num * block_size, total_size)
+        pct = int(done * 100 / total_size)
+        _set_docker_install(
+            phase="downloading",
+            progress_pct=pct,
+            message=f"正在下载 Docker Desktop 安装包… {pct}%",
+        )
+
+    urllib.request.urlretrieve(DOCKER_INSTALLER_URL, str(tmp), reporthook=_reporthook)
+    tmp.replace(dest)
+
+
+def _elevate_docker_installer(installer: Path, install_root: Path) -> None:
+    app_dir = install_root / "DockerDesktop"
+    wsl_root = install_root / "wsl"
+    win_root = install_root / "windows-containers"
+    for p in (app_dir, wsl_root, win_root):
+        p.mkdir(parents=True, exist_ok=True)
+
+    def _q(s: str) -> str:
+        return "'" + s.replace("'", "''") + "'"
+
+    app_s, wsl_s, win_s = str(app_dir), str(wsl_root), str(win_root)
+    arg_list = (
+        "@('install','--accept-license',"
+        f"'--installation-dir={app_s}',"
+        f"'--wsl-default-data-root={wsl_s}',"
+        f"'--windows-containers-default-data-root={win_s}')"
+    )
+    # -Verb RunAs → UAC; no -Wait so API/thread can finish after prompt is shown
+    ps = (
+        f"$p = Start-Process -FilePath {_q(str(installer))} "
+        f"-ArgumentList {arg_list} -Verb RunAs -PassThru; "
+        f"if ($null -eq $p) {{ exit 2 }}; exit 0"
+    )
+    r = subprocess.run(
+        [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            ps,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout or "").strip() or f"exit {r.returncode}"
+        raise RuntimeError(
+            "未能弹出管理员安装（可能取消了 UAC）。"
+            f"详情：{err[:400]}"
+        )
+
+
+def _install_docker_worker(drive: str) -> None:
+    letter = drive.strip().upper().rstrip("\\")
+    if len(letter) == 1:
+        letter = f"{letter}:"
+    if not (len(letter) == 2 and letter[1] == ":" and letter[0].isalpha()):
+        _set_docker_install(phase="error", message="磁盘盘符无效，请选择如 D:", progress_pct=0)
+        return
+    root = Path(f"{letter[0]}:\\")
+    if not root.exists():
+        _set_docker_install(phase="error", message=f"磁盘 {letter} 不存在", progress_pct=0)
+        return
+    try:
+        free = shutil.disk_usage(str(root)).free
+    except OSError as exc:
+        _set_docker_install(phase="error", message=f"无法读取磁盘空间：{exc}", progress_pct=0)
+        return
+    if free < _MIN_FREE_BYTES:
+        _set_docker_install(
+            phase="error",
+            message=(
+                f"{letter} 剩余约 {round(free / (1024**3), 1)} GB，建议至少 25 GB 空闲后再装 Docker。"
+                "请换一块空间更大的盘。"
+            ),
+            progress_pct=0,
+        )
+        return
+
+    install_root = root / "Docker"
+    _set_docker_install(
+        phase="downloading",
+        drive=letter,
+        install_root=str(install_root),
+        progress_pct=0,
+        message="正在下载 Docker Desktop 安装包…",
+    )
+    try:
+        installer = _installer_cache_path()
+        need_dl = True
+        if installer.is_file() and installer.stat().st_size > 50_000_000:
+            need_dl = False
+            _set_docker_install(
+                phase="downloading",
+                progress_pct=100,
+                message="已找到本机缓存的安装包，跳过下载。",
+            )
+        if need_dl:
+            _download_docker_installer(installer)
+
+        _set_docker_install(
+            phase="elevating",
+            progress_pct=100,
+            message="即将弹出「用户账户控制」：请点「是」。安装程序会把 Docker 装到所选盘（含镜像数据目录）。",
+        )
+        _elevate_docker_installer(installer, install_root)
+        _set_docker_install(
+            phase="launched",
+            message=(
+                f"已启动安装到 {install_root}。"
+                "请在安装窗口完成步骤；若要求重启请先重启。"
+                "装好后打开 Docker，登录窗可 Skip，托盘就绪后回本向导点「重新检测」。"
+                "个人使用通常无需注册 Docker Hub。"
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — surface to UI
+        _set_docker_install(phase="error", message=f"安装失败：{exc}", progress_pct=0)
+
+
+def start_docker_desktop_install(drive: str) -> dict[str, Any]:
+    """Download Docker Desktop installer and elevate install to the chosen drive."""
+    if os.name != "nt":
+        return {"ok": False, "message": "仅支持 Windows 上一键安装 Docker Desktop。"}
+    with _DOCKER_INSTALL_LOCK:
+        phase = _DOCKER_INSTALL.get("phase")
+        if phase in ("downloading", "elevating"):
+            return {
+                "ok": False,
+                "message": _DOCKER_INSTALL.get("message") or "安装进行中，请稍候…",
+                "docker_install": dict(_DOCKER_INSTALL),
+            }
+    letter = (drive or "").strip() or next(
+        (d["letter"] for d in list_install_drives() if d.get("default")),
+        "D:",
+    )
+    _set_docker_install(
+        phase="downloading",
+        drive=letter,
+        message="已排队：准备下载并安装…",
+        progress_pct=0,
+        install_root="",
+    )
+    threading.Thread(
+        target=_install_docker_worker,
+        args=(letter,),
+        name="docker-desktop-install",
+        daemon=True,
+    ).start()
+    return {
+        "ok": True,
+        "message": (
+            f"已开始安装到 {letter}：先下载安装包，再弹出管理员确认。"
+            "请点「是」，装完后回向导「重新检测」。无需自己打开终端。"
+        ),
+        "drive": letter,
+        "docker_install": docker_install_progress(),
+    }
+
 
 TAR_BY_FAMILY = {
     "general": "duix.avatar.tar",
@@ -77,7 +326,7 @@ def docker_load_tar(tar_path: Path | None = None, *, family: str | None = None) 
     if not docker_available():
         return {
             "ok": False,
-            "message": "Docker Desktop 未运行。请先安装并打开 Docker，等到引擎就绪后再加载镜像。",
+            "message": "Docker Desktop 未运行。请先安装并打开 Docker（个人使用通常无需注册，登录可跳过），等到 docker info / 向导「重新检测」通过后再加载镜像。",
             "need_docker": True,
         }
 
@@ -156,7 +405,7 @@ def docker_load_tar(tar_path: Path | None = None, *, family: str | None = None) 
 
 
 def open_docker_desktop_download() -> dict[str, Any]:
-    """Open Docker Desktop download page in the default browser."""
+    """Open Docker Desktop download page in the default browser (fallback)."""
     url = DOCKER_PRODUCT_URL
     try:
         webbrowser.open(url)
@@ -168,7 +417,11 @@ def open_docker_desktop_download() -> dict[str, Any]:
         "opened": opened,
         "product_url": DOCKER_PRODUCT_URL,
         "installer_url": DOCKER_INSTALLER_URL,
-        "message": "已尝试打开 Docker Desktop 下载页。安装需管理员权限，完成后可能要重启，再回到本向导点「重新检测」。",
+        "message": (
+            "已打开官网下载页（备用）。官网图形安装默认装 C 盘。"
+            "推荐回到本向导：选磁盘 →「一键安装到所选盘」，由软件代装到 D:/E: 等盘，无需自己跑命令。"
+            "个人使用一般无需注册；登录窗可 Skip。验收：托盘就绪后点「重新检测」。"
+        ),
     }
 
 
@@ -186,12 +439,24 @@ def try_launch_docker_desktop() -> dict[str, Any]:
         Path(os.environ.get("LOCALAPPDATA", ""))
         / "Docker"
         / "Docker Desktop.exe",
+        # Custom-drive installs via wizard / install_docker_desktop_custom_drive.ps1
+        Path(r"D:\Docker\DockerDesktop\Docker Desktop.exe"),
+        Path(r"E:\Docker\DockerDesktop\Docker Desktop.exe"),
+        Path(r"F:\Docker\DockerDesktop\Docker Desktop.exe"),
     ]
+    for letter in "CDEFGHIJKLMNOPQRSTUVWXYZ":
+        candidates.append(Path(f"{letter}:\\Docker\\DockerDesktop\\Docker Desktop.exe"))
+    custom = (os.environ.get("DOCKER_DESKTOP_PATH") or "").strip()
+    if custom:
+        candidates.insert(0, Path(custom))
     exe = next((p for p in candidates if p.is_file()), None)
     if exe is None:
         return {
             "ok": False,
-            "message": "未找到 Docker Desktop 安装路径。请先下载安装，或从开始菜单手动打开。",
+            "message": (
+                "未找到 Docker Desktop。请在上方选一块剩余空间够的盘，点「一键安装到所选盘」"
+                "（会弹管理员确认，装到该盘，不必打开终端）。"
+            ),
             "need_install": True,
             **open_docker_desktop_download(),
         }
@@ -203,7 +468,11 @@ def try_launch_docker_desktop() -> dict[str, Any]:
         )
         return {
             "ok": True,
-            "message": f"已尝试启动：{exe.name}。请等待托盘图标就绪（约 30–90 秒），再点「重新检测」。",
+            "message": (
+                f"已尝试启动：{exe.name}。"
+                "请等待托盘就绪（约 30–90 秒）；若弹出登录请跳过，不必注册。"
+                "再点「重新检测」（验收：docker info 成功即可）。"
+            ),
             "path": str(exe),
         }
     except OSError as exc:
@@ -262,9 +531,13 @@ def wizard_status() -> dict[str, Any]:
             "title": "安装并启动 Docker Desktop",
             "done": step2_done,
             "detail": (
-                "Docker 引擎已就绪"
+                "验收通过：docker info 成功（无需 Docker Hub 账号）"
                 if step2_done
-                else ("已检测到 Docker 客户端，但引擎未就绪" if docker_cli else "未检测到 Docker")
+                else (
+                    "已装客户端但引擎未就绪：打开 Docker，跳过登录，等到托盘就绪后点「重新检测」"
+                    if docker_cli
+                    else "未检测到 Docker。个人使用通常无需注册；装好后验收以 docker info 为准"
+                )
             ),
         },
         {
@@ -325,6 +598,12 @@ def wizard_status() -> dict[str, Any]:
         "current_step": next((s["id"] for s in steps if not s["done"]), 4),
         "docker_product_url": DOCKER_PRODUCT_URL,
         "docker_installer_url": DOCKER_INSTALLER_URL,
+        "docker_acceptance_note": (
+            "验收：本机 docker info 成功即可（个人使用通常无需注册，登录窗可 Skip）。"
+            "请用下方「选盘 + 一键安装」——官网图形安装只会装 C 盘；本向导会把程序和镜像数据装到你选的盘。"
+        ),
+        "install_drives": list_install_drives(),
+        "docker_install": docker_install_progress(),
         "general_pack_ops_note": general_ops_note,
         "can_load": bool(tars) and docker_ok,
         "can_start": bool(st.get("can_start")),

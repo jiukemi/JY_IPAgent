@@ -225,6 +225,11 @@
         <li>也可在 <strong>设置 → 网盘加速 · 夸克</strong> 单独下载与安装；口播分 <strong>通用显卡 / RTX50</strong> 两包，只下本机推荐的那一个</li>
         <li>有外网且 Docker 能 pull 时，也可跳过夸克，由程序按显卡拉取镜像；<strong>第一次约十几 GB</strong>，成功一次即可</li>
       </ol>
+      <p><strong>Docker 验收与磁盘：</strong></p>
+      <ul>
+        <li><strong>不必注册 Docker Hub</strong>：个人 / 小团队通常可跳过登录窗。软件验收标准是本机 <code>docker info</code> 成功。</li>
+        <li><strong>不要用官网图形安装当主路径</strong>（默认只能装 C 盘）。请在应用 <strong>口播引擎安装向导</strong> 里：选磁盘 →「一键安装到所选盘」（会弹一次管理员确认），装到如 <code>D:\Docker\</code>。</li>
+      </ul>
       <p>软件安装包本身不含大镜像，体积保持较小。当前推荐路径仍是 <strong>Docker + 镜像</strong>（在线或夸克离线）。</p>
 
       <h3 id="s3-3">3.3 推荐操作顺序</h3>

@@ -300,6 +300,16 @@ def heygem_wizard_open_docker() -> dict:
     return open_docker_desktop_download()
 
 
+@router.post("/heygem/wizard/install-docker")
+def heygem_wizard_install_docker(body: dict | None = None) -> dict:
+    """Download Docker Desktop and elevate-install onto the user-chosen drive (no terminal)."""
+    from workflow.heygem_wizard import start_docker_desktop_install
+
+    body = body or {}
+    drive = (body.get("drive") or "").strip()
+    return start_docker_desktop_install(drive)
+
+
 @router.post("/heygem/wizard/launch-docker")
 def heygem_wizard_launch_docker() -> dict:
     from workflow.heygem_wizard import try_launch_docker_desktop

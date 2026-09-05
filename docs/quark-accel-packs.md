@@ -100,3 +100,19 @@ docker load -i data\runtime\heygem\duix.avatar.tar
 docker load -i data\runtime\heygem\duix.avatar-5090.tar
 .\scripts\setup\setup_heygem.ps1
 ```
+
+### Docker 验收（与注册无关）
+
+软件只认 **`docker info` 成功**。个人使用一般 **不必注册 Docker Hub**；弹出 Sign in 可跳过。夸克包走本地 `docker load`，不依赖 Hub 登录。
+
+### Docker 装到非 C 盘（给用户：向导一键）
+
+**面向小白：不要让他们跑终端。** 应用内 **口播引擎安装向导** → 选盘 → **「一键安装到所选盘」**（下载安装包 + 弹 UAC，带 `--installation-dir` / `--wsl-default-data-root`）。
+
+运维/脚本备用（仓库内）：
+
+```powershell
+.\scripts\setup\install_docker_desktop_custom_drive.ps1 -Drive D: -Download
+```
+
+已装在 C: 的需先卸载再在向导里重装到其它盘，或自行迁移 `docker-desktop-data`。
