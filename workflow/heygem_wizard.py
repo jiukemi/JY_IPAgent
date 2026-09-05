@@ -239,50 +239,160 @@ def _download_docker_installer(dest: Path) -> None:
     )
 
 
-def _elevate_docker_installer(installer: Path, install_root: Path) -> None:
+def _write_docker_install_cmd(installer: Path, install_root: Path) -> Path:
+    """Write a .cmd that runs the installer with custom dirs (UAC-friendly)."""
     app_dir = install_root / "DockerDesktop"
     wsl_root = install_root / "wsl"
     win_root = install_root / "windows-containers"
     for p in (app_dir, wsl_root, win_root):
         p.mkdir(parents=True, exist_ok=True)
+    cache = _installer_cache_path().parent
+    cache.mkdir(parents=True, exist_ok=True)
+    cmd_path = cache / "install_docker_custom_drive.cmd"
+    # cmd.exe quoting: "" inside quoted paths
+    def _cq(s: str) -> str:
+        return '"' + str(s).replace('"', "") + '"'
 
-    def _q(s: str) -> str:
-        return "'" + s.replace("'", "''") + "'"
+    lines = [
+        "@echo off",
+        "chcp 65001 >nul",
+        "echo Installing Docker Desktop to custom drive...",
+        "echo Installer: " + str(installer),
+        "echo Target: " + str(install_root),
+        (
+            f'{_cq(str(installer))} install --accept-license '
+            f'--installation-dir={app_dir} '
+            f'--wsl-default-data-root={wsl_root} '
+            f'--windows-containers-default-data-root={win_root}'
+        ),
+        "set ERR=%ERRORLEVEL%",
+        "if not %ERR%==0 (",
+        "  echo Install failed, exit=%ERR%",
+        "  pause",
+        "  exit /b %ERR%",
+        ")",
+        "echo Install finished. You can close this window.",
+        "exit /b 0",
+        "",
+    ]
+    cmd_path.write_text("\r\n".join(lines), encoding="utf-8")
+    return cmd_path
 
-    app_s, wsl_s, win_s = str(app_dir), str(wsl_root), str(win_root)
-    arg_list = (
-        "@('install','--accept-license',"
-        f"'--installation-dir={app_s}',"
-        f"'--wsl-default-data-root={wsl_s}',"
-        f"'--windows-containers-default-data-root={win_s}')"
-    )
-    # -Verb RunAs → UAC; no -Wait so API/thread can finish after prompt is shown
-    ps = (
-        f"$p = Start-Process -FilePath {_q(str(installer))} "
-        f"-ArgumentList {arg_list} -Verb RunAs -PassThru; "
-        f"if ($null -eq $p) {{ exit 2 }}; exit 0"
-    )
-    r = subprocess.run(
-        [
-            "powershell",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            ps,
-        ],
-        capture_output=True,
-        text=True,
-        timeout=120,
-        check=False,
-    )
-    if r.returncode != 0:
-        err = (r.stderr or r.stdout or "").strip() or f"exit {r.returncode}"
-        raise RuntimeError(
-            "未能弹出管理员安装（可能取消了 UAC）。"
-            f"详情：{err[:400]}"
+
+def _elevate_docker_installer(installer: Path, install_root: Path) -> Path:
+    """Show UAC and start installer. Prefer ShellExecute runas; return .cmd path used."""
+    cmd_path = _write_docker_install_cmd(installer, install_root)
+
+    # 1) ShellExecuteW "runas" — reliable UAC on interactive desktop
+    try:
+        import ctypes
+
+        rc = int(
+            ctypes.windll.shell32.ShellExecuteW(
+                None,
+                "runas",
+                str(cmd_path),
+                None,
+                str(cmd_path.parent),
+                1,  # SW_SHOWNORMAL
+            )
         )
+        if rc > 32:
+            return cmd_path
+        raise RuntimeError(f"ShellExecuteW runas 返回 {rc}")
+    except Exception as shell_exc:
+        # 2) PowerShell Start-Process -Verb RunAs (fallback)
+        def _q(s: str) -> str:
+            return "'" + s.replace("'", "''") + "'"
 
+        ps = (
+            f"$p = Start-Process -FilePath {_q(str(cmd_path))} "
+            f"-Verb RunAs -PassThru; "
+            f"if ($null -eq $p) {{ throw 'UAC cancelled or failed' }}; "
+            f"Write-Output $p.Id"
+        )
+        r = subprocess.run(
+            [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-Command",
+                ps,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0) if os.name == "nt" else 0,
+        )
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout or "").strip() or f"exit {r.returncode}"
+            raise RuntimeError(
+                "未能弹出管理员确认（UAC）。"
+                f"ShellExecute：{shell_exc}；PowerShell：{err}。"
+                f"请手动右键以管理员运行：{cmd_path}"
+            )
+        return cmd_path
+
+
+def prepare_docker_desktop_install(
+    drive: str,
+    *,
+    installer_path: str | None = None,
+) -> dict[str, Any]:
+    """Validate inputs and write elevate .cmd — for Electron main to UAC-launch."""
+    if os.name != "nt":
+        return {"ok": False, "message": "仅支持 Windows。"}
+    letter = (drive or "").strip().upper().rstrip("\\")
+    if len(letter) == 1:
+        letter = f"{letter}:"
+    if not (len(letter) == 2 and letter[1] == ":" and letter[0].isalpha()):
+        return {"ok": False, "message": "磁盘盘符无效"}
+    root = Path(f"{letter[0]}:\\")
+    if not root.exists():
+        return {"ok": False, "message": f"磁盘 {letter} 不存在"}
+    try:
+        free = shutil.disk_usage(str(root)).free
+    except OSError as exc:
+        return {"ok": False, "message": f"无法读取磁盘空间：{exc}"}
+    if free < _MIN_FREE_BYTES:
+        return {
+            "ok": False,
+            "message": f"{letter} 剩余约 {round(free / (1024**3), 1)} GB，建议至少 25 GB。",
+        }
+
+    installer: Path | None = None
+    if installer_path:
+        cand = Path(installer_path.strip().strip('"'))
+        if _installer_looks_valid(cand):
+            installer = cand
+    if installer is None:
+        local = find_local_docker_installers()
+        if local:
+            installer = Path(local[0]["path"])
+        elif _installer_looks_valid(_installer_cache_path()):
+            installer = _installer_cache_path()
+    if installer is None:
+        return {
+            "ok": False,
+            "message": "未找到本机 Docker Desktop 安装包。请先下载并扫描/填写路径。",
+            "local_installers": find_local_docker_installers(),
+        }
+
+    install_root = root / "Docker"
+    cmd_path = _write_docker_install_cmd(installer, install_root)
+    return {
+        "ok": True,
+        "drive": letter,
+        "installer": str(installer),
+        "install_root": str(install_root),
+        "cmd_path": str(cmd_path),
+        "message": (
+            f"已准备安装到 {install_root}。接下来会弹出管理员确认，请点「是」。"
+            "若没看到窗口，请看任务栏是否有盾牌图标闪烁。"
+        ),
+    }
 
 def _install_docker_worker(
     drive: str,
@@ -378,16 +488,15 @@ def _install_docker_worker(
         _set_docker_install(
             phase="elevating",
             progress_pct=100,
-            message="即将弹出「用户账户控制」：请点「是」。安装程序会把 Docker 装到所选盘（含镜像数据目录）。",
+            message="即将弹出「用户账户控制」：请点「是」。若没看到窗口，请看任务栏盾牌图标是否闪烁。",
         )
-        _elevate_docker_installer(installer, install_root)
+        cmd_path = _elevate_docker_installer(installer, install_root)
         _set_docker_install(
             phase="launched",
             message=(
-                f"已启动安装到 {install_root}。"
-                "请在安装窗口完成步骤；若要求重启请先重启。"
+                f"已请求管理员权限安装到 {install_root}。"
+                f"若仍未出现 UAC，请手动右键以管理员运行：{cmd_path}"
                 "装好后打开 Docker，登录窗可 Skip，托盘就绪后回本向导点「重新检测」。"
-                "个人使用通常无需注册 Docker Hub。"
             ),
         )
     except Exception as exc:  # noqa: BLE001 — surface to UI

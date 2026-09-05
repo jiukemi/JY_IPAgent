@@ -303,12 +303,15 @@ def heygem_wizard_open_docker() -> dict:
 @router.post("/heygem/wizard/install-docker")
 def heygem_wizard_install_docker(body: dict | None = None) -> dict:
     """Install Docker Desktop onto the user-chosen drive from a local installer (preferred)."""
-    from workflow.heygem_wizard import start_docker_desktop_install
+    from workflow.heygem_wizard import prepare_docker_desktop_install, start_docker_desktop_install
 
     body = body or {}
     drive = (body.get("drive") or "").strip()
     installer_path = (body.get("installer_path") or body.get("path") or "").strip() or None
     allow_download = bool(body.get("allow_download") or body.get("download"))
+    # Desktop shell elevates UAC itself; API only prepares the .cmd
+    if body.get("prepare_only"):
+        return prepare_docker_desktop_install(drive, installer_path=installer_path)
     return start_docker_desktop_install(
         drive,
         installer_path=installer_path,

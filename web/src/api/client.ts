@@ -1196,11 +1196,15 @@ export const api = {
     drive: string
     installer_path?: string
     allow_download?: boolean
+    prepare_only?: boolean
   }) =>
     request<{
       ok: boolean
       message: string
       drive?: string
+      installer?: string
+      install_root?: string
+      cmd_path?: string
       local_installers?: Array<{ path: string; name: string; label: string; size_gb?: number }>
       docker_install?: {
         phase?: string

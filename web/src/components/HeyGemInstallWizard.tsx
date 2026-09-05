@@ -138,6 +138,49 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
     }
     setBusy('安装 Docker')
     try {
+      const desktop = (
+        window as unknown as {
+          agentDesktop?: {
+            isDesktop?: boolean
+            elevateDockerInstall?: (p: {
+              installer?: string
+              cmd_path?: string
+            }) => Promise<{ ok: boolean; message?: string }>
+          }
+        }
+      ).agentDesktop
+
+      // Desktop: prepare .cmd in API, then elevate from Electron main (UAC always shows).
+      if (desktop?.isDesktop && desktop.elevateDockerInstall && !allowDownload) {
+        const prep = await api.heygemWizardInstallDocker({
+          drive: installDrive,
+          installer_path: installerPath.trim() || undefined,
+          prepare_only: true,
+        })
+        if (!prep.ok || !prep.cmd_path) {
+          setAlert({ title: '无法准备安装', message: prep.message, variant: 'warning' })
+          return
+        }
+        push(prep.message)
+        const elev = await desktop.elevateDockerInstall({
+          installer: prep.installer,
+          cmd_path: prep.cmd_path,
+        })
+        push(elev.message || '')
+        setAlert({
+          title: elev.ok ? '请确认管理员权限' : '未能弹出管理员确认',
+          message:
+            (elev.message || '') +
+            (prep.install_root ? `\n\n目标目录：${prep.install_root}` : '') +
+            (elev.ok
+              ? '\n\n点「是」后等待安装完成；装好后打开 Docker，再点「重新检测」。'
+              : `\n\n可手动右键以管理员运行：\n${prep.cmd_path}`),
+          variant: elev.ok ? 'info' : 'warning',
+        })
+        await refresh()
+        return
+      }
+
       const r = await api.heygemWizardInstallDocker({
         drive: installDrive,
         installer_path: installerPath.trim() || undefined,

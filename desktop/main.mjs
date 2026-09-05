@@ -17,6 +17,21 @@ import { downloadAndLaunchInstaller, openReleasePage } from './updater.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
+// Local API / health checks must never go through Clash/VPN system proxy.
+// Otherwise first launch sticks at ~96%「等待健康检查」when the proxy port is down.
+process.env.NO_PROXY = [process.env.NO_PROXY, '127.0.0.1', 'localhost', '::1']
+  .filter(Boolean)
+  .join(',')
+process.env.no_proxy = process.env.NO_PROXY
+for (const k of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) {
+  delete process.env[k]
+}
+try {
+  app.commandLine.appendSwitch('proxy-bypass-list', '<local>;127.0.0.1;localhost;::1')
+} catch {
+  /* ignore */
+}
+
 // Must run before app.ready — local disk media without HTTP buffer
 protocol.registerSchemesAsPrivileged([
   {
@@ -1019,11 +1034,48 @@ function registerSplashIpc() {
     if (err) return { ok: false, message: err }
     return { ok: true }
   })
+
+  ipcMain.handle('desktop:elevate-docker-install', async (_e, payload) => {
+    const installer = typeof payload?.installer === 'string' ? payload.installer.trim() : ''
+    const cmdPath = typeof payload?.cmd_path === 'string' ? payload.cmd_path.trim() : ''
+    const target = cmdPath || installer
+    if (!target || !fs.existsSync(target)) {
+      return { ok: false, message: '安装脚本或安装包不存在' }
+    }
+    // Elevate from Electron main (interactive desktop) so UAC actually appears.
+    const ps = `
+$ErrorActionPreference = 'Stop'
+$p = Start-Process -FilePath ${JSON.stringify(target)} -Verb RunAs -PassThru
+if ($null -eq $p) { exit 2 }
+Write-Output ("PID=" + $p.Id)
+exit 0
+`
+    try {
+      const out = execSync(`powershell -NoProfile -ExecutionPolicy Bypass -Command ${JSON.stringify(ps)}`, {
+        windowsHide: false,
+        timeout: 120000,
+        encoding: 'utf8',
+      })
+      return {
+        ok: true,
+        message:
+          '已弹出管理员确认（若没看到请看任务栏闪烁的盾牌图标）。请点「是」继续安装。',
+        detail: String(out || '').trim(),
+      }
+    } catch (e) {
+      return {
+        ok: false,
+        message:
+          `未能弹出管理员安装：${e instanceof Error ? e.message : String(e)}。` +
+          '请右键安装包「以管理员身份运行」，或检查是否点了 UAC「否」。',
+      }
+    }
+  })
 }
 
 function showBootError(msg) {
   const tip = app.isPackaged
-    ? `${msg}\n\n请确认：\n1. 已联网\n2. 杀毒软件未拦截下载\n3. 磁盘空间充足\n\n可点下方「清除运行时并重试」一键清理后重装环境。\n\n运行时：\n${runtimeDir()}\n\n日志：\n${path.join(runtimeDir(), 'bootstrap.log')}`
+    ? `${msg}\n\n请确认：\n1. 已联网\n2. 杀毒软件未拦截下载\n3. 磁盘空间充足\n4. 若卡在约 96%：关闭失效的系统代理，或先打开梯子再启动\n\n可点下方「清除运行时并重试」一键清理后重装环境。\n\n运行时：\n${runtimeDir()}\n\n日志：\n${path.join(runtimeDir(), 'bootstrap.log')}`
     : `${msg}\n\n开发模式请本机安装 Python 3.11（py -3.11），或先运行 scripts/bootstrap_runtime.ps1。`
   if (splashWindow && !splashWindow.isDestroyed()) {
     splashSend({
@@ -1236,32 +1288,74 @@ function ensureRuntimeBootstrap() {
   })
 }
 
-function waitForHealth(port, timeoutMs = 60000) {
+function probeLocalHealth(port, timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port,
+        path: '/api/health',
+        method: 'GET',
+        family: 4,
+        agent: false,
+        timeout: timeoutMs,
+        headers: { Connection: 'close', Host: `127.0.0.1:${port}` },
+      },
+      (res) => {
+        res.resume()
+        resolve(res.statusCode === 200)
+      },
+    )
+    req.on('error', () => resolve(false))
+    req.on('timeout', () => {
+      req.destroy()
+      resolve(false)
+    })
+    req.end()
+  })
+}
+
+function waitForHealth(port, timeoutMs = 90000) {
   const started = Date.now()
   return new Promise((resolve, reject) => {
-    const tick = () => {
-      const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
-        res.resume()
-        if (res.statusCode === 200) {
-          resolve(true)
-          return
-        }
-        retry()
-      })
-      req.on('error', retry)
-      req.setTimeout(2000, () => {
-        req.destroy()
-        retry()
-      })
+    let settled = false
+    const done = (ok, err) => {
+      if (settled) return
+      settled = true
+      clearInterval(beat)
+      if (ok) resolve(true)
+      else reject(err || new Error('后端启动超时'))
     }
-    const retry = () => {
+    const beat = setInterval(() => {
+      const sec = Math.round((Date.now() - started) / 1000)
+      splashSend({
+        pct: 96,
+        label: `等待健康检查 :${port}（${sec}s）`,
+        line:
+          '若长时间停在 96%：请关闭失效的系统代理/梯子（Clash 等），或打开梯子后再试。健康检查只访问本机 127.0.0.1。',
+      })
+    }, 3000)
+    const tick = async () => {
+      if (settled) return
       if (Date.now() - started > timeoutMs) {
-        reject(new Error('后端启动超时'))
+        done(
+          false,
+          new Error(
+            `后端健康检查超时（:${port}）。\n` +
+              '常见原因：系统代理仍指向已关闭的梯子端口，导致访问 127.0.0.1 被劫持。\n' +
+              '请关闭系统代理后重开本软件；若需梯子，请先打开梯子再启动。',
+          ),
+        )
         return
       }
-      setTimeout(tick, 400)
+      const ok = await probeLocalHealth(port, 2000)
+      if (ok) {
+        done(true)
+        return
+      }
+      setTimeout(tick, 500)
     }
-    tick()
+    void tick()
   })
 }
 
@@ -1351,7 +1445,7 @@ function startBackend() {
       clearInterval(pollTimer)
       splashSend({
         pct: 96,
-        label: `等待健康检查 :${port}`,
+        label: `后端已监听 :${port}，确认健康检查…`,
         line: `backend → http://127.0.0.1:${port}`,
       })
       waitForHealth(port)
@@ -1364,8 +1458,9 @@ function startBackend() {
       for (const line of text.split(/\r?\n/)) {
         if (line.trim()) splashSend({ line: line.trim() })
       }
-      const m = buf.match(/http:\/\/127\.0\.0\.1:(\d+)/)
-      if (m) finishPort(Number(m[1]))
+      // Do NOT treat "打开 http://127.0.0.1:port" log as ready — that prints before
+      // uvicorn is listening; finishing early then hanging on a proxied health check
+      // looks like「卡在 96% 不报错」when Clash/VPN system proxy is dead.
     }
 
     // Fallback when Python stdout is buffered: actively poll health endpoints
@@ -1376,23 +1471,27 @@ function startBackend() {
         return
       }
       const elapsed = Date.now() - pollStarted
-      if (elapsed > 90000) {
+      if (elapsed > 120000) {
         clearInterval(pollTimer)
-        if (!resolved) reject(new Error('后端启动超时（未检测到健康端口 7860–7890）'))
+        if (!resolved) {
+          reject(
+            new Error(
+              '后端启动超时（未检测到健康端口 7860–7890）。\n' +
+                '若卡在 96%：请关闭失效系统代理/先开梯子再启动；并查看运行时日志。',
+            ),
+          )
+        }
         return
       }
       splashSend({
-        pct: Math.min(95, 90 + Math.floor(elapsed / 18000)),
+        pct: Math.min(95, 90 + Math.floor(elapsed / 24000)),
         label: '等待后端就绪…',
-        line: `polling :7860–7890 (${Math.round(elapsed / 1000)}s) — 若超时请看运行时 bootstrap.log / 导出诊断包`,
+        line: `polling :7860–7890 (${Math.round(elapsed / 1000)}s)`,
       })
       for (let port = 7860; port <= 7890; port++) {
-        const req = http.get(`http://127.0.0.1:${port}/api/health`, (res) => {
-          res.resume()
-          if (res.statusCode === 200) finishPort(port)
+        void probeLocalHealth(port, 800).then((ok) => {
+          if (ok) finishPort(port)
         })
-        req.on('error', () => {})
-        req.setTimeout(800, () => req.destroy())
       }
     }, 1200)
 
