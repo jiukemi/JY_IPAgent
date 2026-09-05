@@ -38,10 +38,10 @@ Write-Host "==> Pin deps (avoid numpy 2.x / kornia 0.8 breaking SadTalker)..."
 pip install "scipy==1.10.1" --force-reinstall
 pip install "kornia==0.6.8" --no-deps --force-reinstall
 
-$ckptScript = Join-Path (Split-Path $InstallDir -Parent | Split-Path -Parent) "scripts\download_sadtalker_checkpoints.ps1"
+$ckptScript = Join-Path $ProjectRoot "scripts\download_sadtalker_checkpoints.ps1"
 if (Test-Path $ckptScript) {
     Write-Host "==> Download checkpoints + GFPGAN/RealESRGAN (Windows)..."
-    & $ckptScript
+    & $ckptScript -SadTalkerDir $InstallDir
 } elseif (Test-Path ".\scripts\download_models.sh") {
     Write-Host "==> Download checkpoints (bash script; use Git Bash or WSL if this fails)..."
     bash ./scripts/download_models.sh

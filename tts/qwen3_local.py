@@ -30,11 +30,22 @@ def qwen3_local_block(cfg: dict) -> dict:
 
 
 def resolve_install_dir(cfg: dict) -> Path:
-    raw = (cfg.get("paths") or {}).get("qwen3_local_dir", "tools/Qwen3-TTS")
-    path = Path(raw)
-    if not path.is_absolute():
-        path = ROOT / path
-    return path
+    try:
+        from workflow.engine_dirs import resolve_engine_dir
+
+        return resolve_engine_dir(
+            cfg,
+            path_key="qwen3_local_dir",
+            default_rel="tools/Qwen3-TTS",
+            runtime_name="Qwen3-TTS",
+            markers=("models",),
+        )
+    except Exception:
+        raw = (cfg.get("paths") or {}).get("qwen3_local_dir", "tools/Qwen3-TTS")
+        path = Path(raw)
+        if not path.is_absolute():
+            path = ROOT / path
+        return path
 
 
 def normalize_size(size: str | None) -> str:

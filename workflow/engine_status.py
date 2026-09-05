@@ -150,17 +150,32 @@ def _cosyvoice_status(cfg: dict) -> dict:
 
 
 def _piper_status(cfg: dict) -> dict:
-    piper_dir = Path(cfg.get("paths", {}).get("piper_dir", "tools/Piper"))
-    if not piper_dir.is_absolute():
-        piper_dir = ROOT / piper_dir
+    from workflow.engine_dirs import resolve_engine_dir
+
+    piper_dir = resolve_engine_dir(
+        cfg,
+        path_key="piper_dir",
+        default_rel="tools/Piper",
+        runtime_name="Piper",
+        markers=("zh_CN-huayan-medium.onnx",),
+    )
     model = piper_dir / "zh_CN-huayan-medium.onnx"
     missing: list[str] = []
-    if not _venv_ok(cfg, "piper_dir"):
+    py = piper_dir / "venv" / ("Scripts" if os.name == "nt" else "bin") / (
+        "python.exe" if os.name == "nt" else "python"
+    )
+    if not py.is_file():
         missing.append("Piper 未安装")
     if not model.is_file():
         missing.append("zh_CN-huayan-medium.onnx 模型文件")
     ready = len(missing) == 0
-    return {"installed": _venv_ok(cfg, "piper_dir"), "ready": ready, "preset_ready": ready, "missing": missing}
+    return {
+        "installed": py.is_file(),
+        "ready": ready,
+        "preset_ready": ready,
+        "missing": missing,
+        "install_dir": str(piper_dir),
+    }
 
 
 def _edge_status(_cfg: dict) -> dict:
@@ -200,15 +215,23 @@ def _qwen3_local_status(cfg: dict) -> dict:
 
 
 def _whisper_status(cfg: dict) -> dict:
-    install = Path(cfg.get("paths", {}).get("whisper_dir", "tools/Whisper"))
-    if not install.is_absolute():
-        install = ROOT / install
+    from workflow.engine_dirs import resolve_engine_dir
+
+    install = resolve_engine_dir(
+        cfg,
+        path_key="whisper_dir",
+        default_rel="tools/Whisper",
+        runtime_name="Whisper",
+        markers=("run_asr.py",),
+    )
     py = install / (".venv" if (install / ".venv").is_dir() else "venv") / (
         "Scripts" if os.name == "nt" else "bin"
     ) / ("python.exe" if os.name == "nt" else "python")
     missing: list[str] = []
     if not py.is_file():
-        missing.append("Whisper 虚拟环境未安装（运行 scripts/setup/setup_whisper.ps1）")
+        missing.append("Whisper 虚拟环境未安装（设置里一键安装）")
+    elif not (install / "run_asr.py").is_file():
+        missing.append("缺少 run_asr.py（请重新安装 Whisper）")
     else:
         try:
             chk = subprocess.run(
@@ -224,7 +247,13 @@ def _whisper_status(cfg: dict) -> dict:
         except (OSError, subprocess.TimeoutExpired):
             missing.append("无法检测 faster-whisper")
     ready = len(missing) == 0
-    return {"installed": py.is_file(), "ready": ready, "preset_ready": ready, "missing": missing}
+    return {
+        "installed": py.is_file(),
+        "ready": ready,
+        "preset_ready": ready,
+        "missing": missing,
+        "install_dir": str(install),
+    }
 
 
 def _funasr_status(cfg: dict) -> dict:

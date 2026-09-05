@@ -1,7 +1,12 @@
-# Download SadTalker checkpoints into tools/SadTalker (Windows, no bash)
+# Download SadTalker checkpoints (Windows, no bash)
+param(
+  [string]$SadTalkerDir = ""
+)
 $ErrorActionPreference = "Stop"
-$ST = Join-Path (Split-Path $PSScriptRoot -Parent) "tools\SadTalker"
-Set-Location $ST
+if (-not $SadTalkerDir) {
+  $SadTalkerDir = Join-Path (Split-Path $PSScriptRoot -Parent) "tools\SadTalker"
+}
+Set-Location $SadTalkerDir
 
 New-Item -ItemType Directory -Force -Path ".\checkpoints", ".\gfpgan\weights" | Out-Null
 
@@ -12,6 +17,7 @@ function Get-IfMissing($Url, $Out) {
     }
     Write-Host "get $Out"
     curl.exe -L --retry 5 --retry-delay 3 -o $Out $Url
+    if ($LASTEXITCODE -ne 0) { throw "download failed: $Out" }
 }
 
 $base = "https://github.com/OpenTalker/SadTalker/releases/download/v0.0.2-rc"

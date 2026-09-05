@@ -675,6 +675,37 @@ def run_engine_install(
                 install = root / install
         ps_args.extend(["-Root", str(root), "-InstallDir", str(install)])
         tick(0.03, f"安装目录：{install}")
+    elif eng in ("whisper", "local_whisper", "piper", "qwen3_local", "funasr"):
+        rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
+        name_map = {
+            "whisper": "Whisper",
+            "local_whisper": "Whisper",
+            "piper": "Piper",
+            "qwen3_local": "Qwen3-TTS",
+            "funasr": "FunASR",
+        }
+        fallback = {
+            "whisper": "tools/Whisper",
+            "local_whisper": "tools/Whisper",
+            "piper": "tools/Piper",
+            "qwen3_local": "tools/Qwen3-TTS",
+            "funasr": "tools/FunASR",
+        }
+        path_key = {
+            "whisper": "whisper_dir",
+            "local_whisper": "whisper_dir",
+            "piper": "piper_dir",
+            "qwen3_local": "qwen3_local_dir",
+            "funasr": "funasr_dir",
+        }[eng]
+        if rt:
+            install = Path(rt).expanduser().resolve() / "engines" / name_map[eng]
+        else:
+            install = Path(cfg.get("paths", {}).get(path_key) or fallback[eng])
+            if not install.is_absolute():
+                install = root / install
+        ps_args.extend(["-Root", str(root), "-InstallDir", str(install)])
+        tick(0.03, f"安装目录：{install}")
 
     env = os.environ.copy()
     env.setdefault("PYTHONUTF8", "1")

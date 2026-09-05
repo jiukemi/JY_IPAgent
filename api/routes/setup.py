@@ -116,6 +116,40 @@ async def install_stream(engine: str = Query(...)):
                     install = ROOT / install
             ps_cmd.extend(["-Root", str(ROOT), "-InstallDir", str(install)])
             yield f"data: {json.dumps({'type': 'log', 'line': f'InstallDir={install}', 'p': 0.03}, ensure_ascii=False)}\n\n"
+        elif eng in ("whisper", "local_whisper", "piper", "qwen3_local", "funasr"):
+            import os
+            from pathlib import Path as _P
+
+            rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
+            name_map = {
+                "whisper": "Whisper",
+                "local_whisper": "Whisper",
+                "piper": "Piper",
+                "qwen3_local": "Qwen3-TTS",
+                "funasr": "FunASR",
+            }
+            fallback = {
+                "whisper": "tools/Whisper",
+                "local_whisper": "tools/Whisper",
+                "piper": "tools/Piper",
+                "qwen3_local": "tools/Qwen3-TTS",
+                "funasr": "tools/FunASR",
+            }
+            path_key = {
+                "whisper": "whisper_dir",
+                "local_whisper": "whisper_dir",
+                "piper": "piper_dir",
+                "qwen3_local": "qwen3_local_dir",
+                "funasr": "funasr_dir",
+            }[eng]
+            if rt:
+                install = _P(rt).expanduser().resolve() / "engines" / name_map[eng]
+            else:
+                install = _P(cfg.get("paths", {}).get(path_key) or fallback[eng])
+                if not install.is_absolute():
+                    install = ROOT / install
+            ps_cmd.extend(["-Root", str(ROOT), "-InstallDir", str(install)])
+            yield f"data: {json.dumps({'type': 'log', 'line': f'InstallDir={install}', 'p': 0.03}, ensure_ascii=False)}\n\n"
 
         proc = await asyncio.create_subprocess_exec(
             *ps_cmd,

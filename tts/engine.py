@@ -50,6 +50,26 @@ def venv_python(cfg: dict, key: str) -> str:
         except Exception:
             if not root.is_absolute():
                 root = Path(root)
+    elif key in ("piper_dir", "qwen3_local_dir", "whisper_dir", "indextts_dir"):
+        try:
+            from workflow.engine_dirs import resolve_engine_dir
+
+            mapping = {
+                "piper_dir": ("tools/Piper", "Piper", ("zh_CN-huayan-medium.onnx",)),
+                "qwen3_local_dir": ("tools/Qwen3-TTS", "Qwen3-TTS", ("models",)),
+                "whisper_dir": ("tools/Whisper", "Whisper", ("run_asr.py",)),
+                "indextts_dir": ("tools/IndexTTS", "IndexTTS", ("pyproject.toml",)),
+            }
+            default_rel, runtime_name, markers = mapping[key]
+            root = resolve_engine_dir(
+                cfg,
+                path_key=key,
+                default_rel=default_rel,
+                runtime_name=runtime_name,
+                markers=markers,
+            )
+        except Exception:
+            pass
     # uv / modern installs use .venv; legacy scripts used venv
     for sub in (".venv", "venv"):
         win = root / sub / "Scripts" / "python.exe"

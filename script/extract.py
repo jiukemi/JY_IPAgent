@@ -37,7 +37,15 @@ def extract_audio_for_asr(
 
 
 def whisper_python(cfg: dict) -> str:
-    root = Path(cfg.get("paths", {}).get("whisper_dir", "tools/Whisper"))
+    from workflow.engine_dirs import resolve_engine_dir
+
+    root = resolve_engine_dir(
+        cfg,
+        path_key="whisper_dir",
+        default_rel="tools/Whisper",
+        runtime_name="Whisper",
+        markers=("run_asr.py",),
+    )
     for sub in (".venv", "venv"):
         win = root / sub / "Scripts" / "python.exe"
         if win.exists():
@@ -54,14 +62,22 @@ def transcribe_whisper(
     *,
     on_progress: ProgressFn | None = None,
 ) -> str:
+    from workflow.engine_dirs import resolve_engine_dir
+
     script_cfg = cfg.get("script") or {}
     model = script_cfg.get("whisper_model", "small")
     language = script_cfg.get("language", "zh")
-    whisper_dir = Path(cfg.get("paths", {}).get("whisper_dir", "tools/Whisper"))
+    whisper_dir = resolve_engine_dir(
+        cfg,
+        path_key="whisper_dir",
+        default_rel="tools/Whisper",
+        runtime_name="Whisper",
+        markers=("run_asr.py",),
+    )
     runner = whisper_dir / "run_asr.py"
     if not runner.exists():
         raise FileNotFoundError(
-            f"Whisper 未安装: {whisper_dir}\n请运行 .\\scripts\\setup\\setup_whisper.ps1"
+            f"Whisper 未安装: {whisper_dir}\n请到设置安装 Whisper，或运行 scripts/setup/setup_whisper.ps1"
         )
 
     _emit(on_progress, 0.35, "Whisper 转写中…")

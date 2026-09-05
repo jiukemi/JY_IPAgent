@@ -61,14 +61,26 @@ def _sys_uid(backend: str, key: str) -> str:
 
 
 def _piper_dir() -> Path:
-    cfg_path = Path("config.yaml")
-    if cfg_path.exists():
-        try:
-            cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
-            return Path(cfg["paths"]["piper_dir"])
-        except (KeyError, TypeError, yaml.YAMLError):
-            pass
-    return Path("tools/Piper")
+    try:
+        from workflow.app_config import load_cfg
+        from workflow.engine_dirs import resolve_engine_dir
+
+        return resolve_engine_dir(
+            load_cfg(),
+            path_key="piper_dir",
+            default_rel="tools/Piper",
+            runtime_name="Piper",
+            markers=("zh_CN-huayan-medium.onnx",),
+        )
+    except Exception:
+        cfg_path = Path("config.yaml")
+        if cfg_path.exists():
+            try:
+                cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+                return Path(cfg["paths"]["piper_dir"])
+            except (KeyError, TypeError, yaml.YAMLError):
+                pass
+        return Path("tools/Piper")
 
 
 def _style_entries_for_backend(backend: str) -> list[VoiceEntry]:
