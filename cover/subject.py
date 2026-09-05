@@ -90,7 +90,9 @@ def cutout_rgba(base_rgba: Image.Image, *, cache_stem: str | None = None) -> Ima
     try:
         from rembg import remove
     except ImportError as exc:
-        raise RuntimeError('未安装 rembg。请执行: py -3.11 -m pip install "rembg[cpu]"') from exc
+        raise RuntimeError(
+            'NEED_INSTALL:rembg|未安装 rembg（封面抠图）。可在本页一键安装，或执行: py -3.11 -m pip install "rembg[cpu]"'
+        ) from exc
 
     try:
         session = _get_session()

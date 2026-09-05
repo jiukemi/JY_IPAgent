@@ -50,6 +50,8 @@ let pyProc = null
 let mainWindow = null
 /** @type {BrowserWindow | null} */
 let splashWindow = null
+let splashReady = false
+const splashQueue = []
 /** @type {import('node:child_process').ChildProcessWithoutNullStreams | null} */
 let bootstrapProc = null
 /** @type {(() => void) | null} */
@@ -116,8 +118,20 @@ function findPython() {
   return findSystemPythonSync()
 }
 
+function resolvePackagedPath(...parts) {
+  const inside = path.join(__dirname, ...parts)
+  const unpacked = inside.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`)
+  if (unpacked !== inside && fs.existsSync(unpacked)) return unpacked
+  if (fs.existsSync(inside)) return inside
+  return inside
+}
+
 function splashSend(payload) {
   if (!splashWindow || splashWindow.isDestroyed()) return
+  if (!splashReady) {
+    splashQueue.push(payload)
+    return
+  }
   try {
     splashWindow.webContents.send('boot:update', payload)
   } catch {
@@ -125,8 +139,26 @@ function splashSend(payload) {
   }
 }
 
+function flushSplashQueue() {
+  if (!splashReady || !splashWindow || splashWindow.isDestroyed()) return
+  const batch = splashQueue.splice(0, splashQueue.length)
+  for (const payload of batch) {
+    try {
+      splashWindow.webContents.send('boot:update', payload)
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 function createSplash() {
+  splashReady = false
+  splashQueue.length = 0
   const iconPath = path.join(__dirname, 'build', 'icon.png')
+  // Prefer CJS preload — ESM (.mjs) inside asar often fails to expose contextBridge on Windows
+  const preloadCjs = resolvePackagedPath('splash-preload.cjs')
+  const preloadMjs = resolvePackagedPath('splash-preload.mjs')
+  const preloadPath = fs.existsSync(preloadCjs) ? preloadCjs : preloadMjs
   splashWindow = new BrowserWindow({
     width: 520,
     height: 640,
@@ -142,16 +174,22 @@ function createSplash() {
     title: '九易AI智能体',
     ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: {
-      preload: path.join(__dirname, 'splash-preload.mjs'),
+      preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false,
     },
+  })
+  splashWindow.webContents.on('preload-error', (_e, pathTried, err) => {
+    console.error('splash preload-error', pathTried, err)
   })
   splashWindow.once('ready-to-show', () => {
     splashWindow?.show()
   })
   void splashWindow.loadFile(path.join(__dirname, 'splash.html'))
   splashWindow.webContents.once('did-finish-load', () => {
+    // Do NOT mark splashReady here — wait for boot:splash-ready from onUpdate subscription
+    // so the first progress events are not delivered before the UI listens.
     splashSend({
       runtime: inspectRuntime(),
       subtitle: '正在准备运行环境…',
@@ -159,6 +197,7 @@ function createSplash() {
       label: '检测运行时',
       free: freeNoticeText(),
       foot: '本应用完全免费 · 请勿上当受骗 · 抖音搜索「九易」获取最新版',
+      logPath: path.join(runtimeDir(), 'bootstrap.log'),
     })
   })
 }
@@ -366,6 +405,10 @@ function relaunchApp() {
 }
 
 function registerSplashIpc() {
+  ipcMain.on('boot:splash-ready', () => {
+    splashReady = true
+    flushSplashQueue()
+  })
   ipcMain.handle('boot:copy', (_e, text) => {
     try {
       clipboard.writeText(String(text || ''))
@@ -384,15 +427,46 @@ function registerSplashIpc() {
     const logFile = path.join(dir, 'bootstrap.log')
     try {
       if (!fs.existsSync(logFile)) {
-        fs.writeFileSync(logFile, '', 'utf8')
+        fs.writeFileSync(logFile, `# bootstrap log\n# ${new Date().toISOString()}\n`, 'utf8')
       }
     } catch {
       /* ignore */
     }
-    // Prefer explorer /select so user actually sees the log file (shell.openPath can no-op)
+    // Splash is alwaysOnTop — drop it so Explorer isn't hidden behind the splash
+    try {
+      if (splashWindow && !splashWindow.isDestroyed()) {
+        splashWindow.setAlwaysOnTop(false)
+        splashWindow.setAlwaysOnTop(true, 'floating')
+        // briefly allow Explorer to take focus
+        splashWindow.setAlwaysOnTop(false)
+      }
+    } catch {
+      /* ignore */
+    }
+    // 1) Electron native reveal (most reliable)
+    try {
+      shell.showItemInFolder(logFile)
+      return { ok: true, path: logFile }
+    } catch {
+      /* fall through */
+    }
+    // 2) Windows explorer /select
     if (process.platform === 'win32') {
       try {
-        spawn('explorer.exe', ['/select,', logFile], { windowsHide: false, detached: true, stdio: 'ignore' }).unref()
+        spawn('explorer.exe', [`/select,${logFile}`], {
+          windowsHide: false,
+          detached: true,
+          stdio: 'ignore',
+        }).unref()
+        return { ok: true, path: logFile }
+      } catch {
+        /* fall through */
+      }
+      try {
+        execSync(`cmd /c start "" explorer /select,"${logFile}"`, {
+          windowsHide: true,
+          timeout: 8000,
+        })
         return { ok: true, path: logFile }
       } catch {
         /* fall through */
@@ -406,7 +480,7 @@ function registerSplashIpc() {
         /* ignore */
       }
     }
-    return { ok: !err, path: dir, message: err || '' }
+    return { ok: !err, path: logFile, message: err || '' }
   })
   ipcMain.handle('boot:quit', () => {
     app.quit()
@@ -1043,9 +1117,14 @@ function createWindow(port) {
     title: ed === 'light' ? '九易AI智能体 · 轻量版' : '九易AI智能体',
     ...(fs.existsSync(iconPath) ? { icon: iconPath } : {}),
     webPreferences: {
-      preload: path.join(__dirname, 'preload.mjs'),
+      preload: (() => {
+        const cjs = resolvePackagedPath('preload.cjs')
+        if (fs.existsSync(cjs)) return cjs
+        return resolvePackagedPath('preload.mjs')
+      })(),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false,
     },
     show: false,
   })

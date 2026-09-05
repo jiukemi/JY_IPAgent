@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+const { contextBridge, ipcRenderer } = require('electron')
 
 const api = {
   onUpdate: (cb) => {
@@ -9,6 +9,7 @@ const api = {
         /* ignore */
       }
     })
+    // Signal ready ONLY after the UI has subscribed — avoids dropped first progress events
     try {
       ipcRenderer.send('boot:splash-ready')
     } catch {

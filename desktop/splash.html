@@ -467,6 +467,7 @@
       let lastLine = ''
       let lastLogAt = Date.now()
       let tickerIdx = 0
+      let gotIpc = false
       const tips = [
         '下方按钮可随时「清除运行时并重试」或打开日志',
         '首次准备常需几分钟：请看进度条下方实时日志',
@@ -573,9 +574,9 @@
         if (!failed) setMarquee((phaseEl.textContent || '准备中') + ' · ' + lastLine)
       }
 
-      // Soft crawl so the bar never looks frozen between real PROGRESS events
+      // Soft crawl only AFTER first real IPC — otherwise bar sticks at fake ~8% forever
       setInterval(() => {
-        if (failed || succeeded) return
+        if (failed || succeeded || !gotIpc) return
         if (targetPct < 99) {
           const ceiling = Math.min(targetPct + 8, 96)
           if (displayPct < ceiling) {
@@ -641,6 +642,7 @@
 
       window.bootSplash?.onUpdate((data) => {
         if (!data) return
+        gotIpc = true
         if (data.runtime) renderRuntime(data.runtime)
         if (data.free && !succeeded) {
           prepFree.textContent = data.free
@@ -685,6 +687,48 @@
         }
       })
 
+      async function openLogClicked() {
+        subtitle.textContent = '正在打开日志…'
+        try {
+          if (!window.bootSplash) {
+            failed = true
+            errText.textContent =
+              '启动页与主进程通信失败（bootSplash 未注入）。请完全退出后重装最新版。\n日志一般在：%APPDATA%\\agent-desktop\\runtime\\bootstrap.log'
+            errorBox.classList.add('show')
+            return
+          }
+          const res = await window.bootSplash.openLogDir()
+          if (res?.path) {
+            appendLog('==> 日志: ' + res.path)
+            setMarquee('已请求打开: ' + res.path)
+            subtitle.textContent = res.ok
+              ? '已打开日志文件夹（若没看到请看任务栏「资源管理器」）'
+              : '打开日志失败'
+          }
+        } catch (e) {
+          appendLog('!! openLog ' + String(e))
+          subtitle.textContent = '打开日志失败: ' + String(e)
+        }
+      }
+
+      // If preload never connected, stop faking progress and show a real error
+      setTimeout(() => {
+        if (gotIpc || failed || succeeded) return
+        if (!window.bootSplash) {
+          failed = true
+          subtitle.textContent = '启动页通信失败'
+          errText.textContent =
+            '无法连接桌面壳（preload 未加载）。请退出后安装最新版。\n也可手动打开：%APPDATA%\\agent-desktop\\runtime\\bootstrap.log'
+          errorBox.classList.add('show')
+          helpBar.classList.remove('hidden')
+          setMarquee('preload 未加载 · 请重装')
+        } else {
+          stallTip.classList.add('show')
+          stallTip.textContent = '尚未收到主进程进度。可点「打开日志」或「清除运行时并重试」。'
+          subtitle.textContent = '等待主进程响应…'
+        }
+      }, 2500)
+
       document.getElementById('btnEnter').onclick = () => {
         window.bootSplash?.continue?.()
       }
@@ -726,9 +770,9 @@
           setTimeout(() => hint.classList.remove('show'), 1600)
         }
       }
-      document.getElementById('btnLog').onclick = () => window.bootSplash?.openLogDir()
+      document.getElementById('btnLog').onclick = () => void openLogClicked()
       document.getElementById('btnQuit').onclick = () => window.bootSplash?.quit()
-      document.getElementById('btnLogLive').onclick = () => window.bootSplash?.openLogDir()
+      document.getElementById('btnLogLive').onclick = () => void openLogClicked()
       document.getElementById('btnQuitLive').onclick = () => window.bootSplash?.quit()
       btnClear.onclick = () => doClearAndRetry(btnClear)
       btnClearLive.onclick = () => doClearAndRetry(btnClearLive)

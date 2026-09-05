@@ -4,6 +4,7 @@ import type { CoverLayer, CoverSubject, CoverTemplate } from '../types'
 import { ActionBtn, Panel } from '../pages/ScriptPage'
 import { AssetPickerModal, type PickerAsset } from './AssetPickerModal'
 import { CoverFramePickerModal } from './CoverFramePickerModal'
+import { useJobQueue } from '../context/JobQueueContext'
 
 function coverImageDisplaySrc(src: string | null | undefined): string | null {
   const s = (src || '').trim()
@@ -1007,6 +1008,7 @@ export function CoverEditor({
   embedded = false,
   onPreviewBridge,
 }: Props) {
+  const jobQueue = useJobQueue()
   const [templates, setTemplates] = useState<CoverTemplate[]>([])
   const [active, setActive] = useState<CoverTemplate>(blankTemplate())
   const [selectedLayerId, setSelectedLayerId] = useState<string | null>(null)
@@ -1016,6 +1018,7 @@ export function CoverEditor({
   const [busy, setBusy] = useState('')
   const [rendering, setRendering] = useState(false)
   const [log, setLog] = useState('')
+  const [needRembgInstall, setNeedRembgInstall] = useState(false)
   const [dirty, setDirty] = useState(false)
   const [cutoutAssets, setCutoutAssets] = useState<CutoutPreviewAssets | null>(null)
   const [cutoutPreparing, setCutoutPreparing] = useState(false)
@@ -1219,6 +1222,7 @@ export function CoverEditor({
       }
       setCutoutPreparing(true)
       setLog('')
+      setNeedRembgInstall(false)
       try {
         const fd = new FormData()
         fd.append('session_path', sessionPath)
@@ -1239,7 +1243,11 @@ export function CoverEditor({
         setLog(res.log || '抠像样片就绪，可拖拽人像')
       } catch (e) {
         setCutoutAssets(null)
-        setLog(e instanceof Error ? e.message : String(e))
+        const msg = e instanceof Error ? e.message : String(e)
+        setLog(msg)
+        if (/NEED_INSTALL:rembg|未安装 rembg|No module named ['\"]rembg['\"]/i.test(msg)) {
+          setNeedRembgInstall(true)
+        }
       } finally {
         setCutoutPreparing(false)
       }
@@ -1793,6 +1801,43 @@ export function CoverEditor({
                 />
                 启用（模糊底 + 可拖拽人像，预览即时改）
               </label>
+              {needRembgInstall && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/40 bg-amber-50 px-2.5 py-2 text-xs text-amber-950 dark:bg-amber-950/30 dark:text-amber-100">
+                  <span>首次未装抠图组件。点下方一键安装（约数百 MB，装完后重新启用预览）。</span>
+                  <ActionBtn
+                    primary
+                    disabled={!!busy}
+                    onClick={() => {
+                      void (async () => {
+                        setBusy('安装抠图')
+                        setLog('正在安装 rembg… 请到任务中心看进度')
+                        try {
+                          const outcome = await jobQueue.enqueue({
+                            type: 'engine_install',
+                            title: '安装封面抠图 rembg',
+                            force: true,
+                            priority: 20,
+                            payload: { engine: 'rembg' },
+                          })
+                          jobQueue.setCenterOpen(true)
+                          setLog(
+                            outcome.ok
+                              ? '已加入任务中心安装 rembg，完成后请再开关一次「人像抠图」'
+                              : outcome.message || '安装任务未能加入',
+                          )
+                          if (outcome.ok) setNeedRembgInstall(false)
+                        } catch (err) {
+                          setLog(err instanceof Error ? err.message : String(err))
+                        } finally {
+                          setBusy('')
+                        }
+                      })()
+                    }}
+                  >
+                    {busy === '安装抠图' ? '安装中…' : '一键安装抠图组件'}
+                  </ActionBtn>
+                </div>
+              )}
             </Field>
             {active.subject?.enabled && (
               <>

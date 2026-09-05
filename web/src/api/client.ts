@@ -153,14 +153,17 @@ export const api = {
     }>(`/api/browser/status${platform ? '?platform=' + platform : ''}`),
 
   browserLogin: (force?: boolean, platform?: string) =>
-    request<{ ok: boolean; message: string; profile_dir?: string; platform_name?: string }>(
-      '/api/browser/login',
-      {
-        method: 'POST',
-        body: JSON.stringify({ force: !!force, platform: platform || '' }),
-        headers: { 'Content-Type': 'application/json' },
-      },
-    ),
+    request<{
+      ok: boolean
+      message: string
+      profile_dir?: string
+      platform_name?: string
+      need_install?: string
+    }>('/api/browser/login', {
+      method: 'POST',
+      body: JSON.stringify({ force: !!force, platform: platform || '' }),
+      headers: { 'Content-Type': 'application/json' },
+    }),
 
   browserPlatforms: () =>
     request<{

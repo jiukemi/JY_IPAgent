@@ -49,7 +49,8 @@ def login(body: LoginBody | None = None) -> dict:
     if not playwright_available():
         return {
             "ok": False,
-            "message": "请先安装 Playwright：在本机环境安装后重开，或运行 py -m pip install playwright && py -m playwright install chromium",
+            "need_install": "playwright",
+            "message": "未安装 Playwright / Chromium。请点「一键安装浏览器引擎」后重试登录。",
         }
     force = bool(body and body.force)
     platform = (body and body.platform) or ""
@@ -59,7 +60,24 @@ def login(body: LoginBody | None = None) -> dict:
     try:
         return start_login_async(cfg, force=force, platform_id=platform)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        msg = str(exc)
+        low = msg.lower()
+        if any(
+            k in low
+            for k in (
+                "executable doesn't exist",
+                "chromium",
+                "browserType.launch",
+                "playwright",
+                "chrome",
+            )
+        ):
+            return {
+                "ok": False,
+                "need_install": "playwright",
+                "message": f"浏览器引擎不可用：{msg}\n请点「一键安装浏览器引擎」后重试。",
+            }
+        raise HTTPException(status_code=400, detail=msg) from exc
 
 
 @router.get("/detect")

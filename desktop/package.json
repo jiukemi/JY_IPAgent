@@ -1,7 +1,7 @@
 {
   "name": "agent-desktop",
   "private": true,
-  "version": "0.1.05",
+  "version": "0.1.06",
   "description": "九易AI智能体桌面壳 — 按需下载引擎",
   "main": "main.mjs",
   "scripts": {
@@ -27,12 +27,18 @@
     "files": [
       "main.mjs",
       "updater.mjs",
+      "preload.cjs",
       "preload.mjs",
       "splash.html",
+      "splash-preload.cjs",
       "splash-preload.mjs",
       "build/icon.png",
       "build/icon.ico",
       "package.json"
+    ],
+    "asarUnpack": [
+      "**/splash-preload.cjs",
+      "**/preload.cjs"
     ],
     "extraResources": [
       {
@@ -50,7 +56,7 @@
           ]
         }
       ],
-      "artifactName": "九易AI智能体-Setup-0.1.05.${ext}"
+      "artifactName": "九易AI智能体-Setup-0.1.06.${ext}"
     },
     "nsis": {
       "oneClick": false,

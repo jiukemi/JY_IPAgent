@@ -39,6 +39,7 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
   const [upload, setUpload] = useState<File | null>(null)
   const [saveHint, setSaveHint] = useState('')
   const [browserMsg, setBrowserMsg] = useState('')
+  const [needBrowserInstall, setNeedBrowserInstall] = useState(false)
   const [browserForce, setBrowserForce] = useState(false)
   const [browserLoggedIn, setBrowserLoggedIn] = useState<boolean | null>(null)
   const [platforms, setPlatforms] = useState<{ id: string; name: string }[]>([
@@ -432,7 +433,38 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
       const res = await api.browserLogin(browserForce, activePlatform)
       setBrowserMsg(res.message)
       setBrowserForce(!res.ok)
+      const need =
+        res.need_install === 'playwright' ||
+        /playwright|chromium|浏览器引擎|Executable doesn't exist|chrome/i.test(res.message || '')
+      setNeedBrowserInstall(!!need && !res.ok)
       window.setTimeout(() => void refreshBrowserStatus(), 3000)
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      setBrowserMsg(msg)
+      setNeedBrowserInstall(/playwright|chromium|浏览器引擎|Executable doesn't exist/i.test(msg))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const installBrowserEngine = async () => {
+    setBusy('安装浏览器')
+    setBrowserMsg('正在安装 Playwright / Chromium… 请到任务中心看进度')
+    try {
+      const outcome = await jobQueue.enqueue({
+        type: 'engine_install',
+        title: '安装浏览器引擎 Playwright',
+        force: true,
+        priority: 20,
+        payload: { engine: 'playwright' },
+      })
+      jobQueue.setCenterOpen(true)
+      setBrowserMsg(
+        outcome.ok
+          ? '已加入任务中心安装浏览器引擎，完成后请再点「浏览器登录」'
+          : outcome.message || '安装任务未能加入',
+      )
+      if (outcome.ok) setNeedBrowserInstall(false)
     } catch (e) {
       setBrowserMsg(e instanceof Error ? e.message : String(e))
     } finally {
@@ -1002,6 +1034,11 @@ export function ScriptPage({ session, onUpdate, configVersion = 0 }: Props) {
               <ActionBtn disabled={!!busy} onClick={() => void refreshBrowserStatus()}>
                 刷新
               </ActionBtn>
+              {needBrowserInstall && (
+                <ActionBtn disabled={!!busy} onClick={() => void installBrowserEngine()}>
+                  {busy === '安装浏览器' ? '安装中…' : '一键安装浏览器引擎'}
+                </ActionBtn>
+              )}
               <ActionBtn primary disabled={!!busy} onClick={() => void openBrowserLogin()}>
                 {busy === '登录' ? '…' : browserForce ? '强制重开' : '浏览器登录'}
               </ActionBtn>

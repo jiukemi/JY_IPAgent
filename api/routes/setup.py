@@ -34,6 +34,11 @@ ALLOWED_SCRIPTS["heygem"] = "setup_heygem.ps1"
 ALLOWED_SCRIPTS["whisper"] = "setup_whisper.ps1"
 ALLOWED_SCRIPTS["funasr"] = "setup_funasr.ps1"
 ALLOWED_SCRIPTS["local_whisper"] = "setup_whisper.ps1"
+# Optional first-boot skips — one-click install when cover / browser needs them
+ALLOWED_SCRIPTS["rembg"] = "setup_rembg.ps1"
+ALLOWED_SCRIPTS["playwright"] = "setup_playwright.ps1"
+
+OPTIONAL_INSTALL = frozenset({"rembg", "playwright"})
 
 
 @router.get("/hardware")
@@ -59,15 +64,16 @@ async def install_stream(engine: str = Query(...)):
         raise HTTPException(status_code=400, detail=f"引擎 {eng} 不支持一键安装")
 
     cfg = load_cfg()
-    st = check_engine(eng, cfg)
-    if not st.get("compatible", True):
-        min_v = st.get("min_vram_gb") or 0
-        missing = st.get("missing") or []
-        why = "；".join(str(m) for m in missing[:3]) if missing else f"本机显存不足（建议 ≥ {min_v:g}GB）"
-        raise HTTPException(
-            status_code=400,
-            detail=f"本机配置不支持「{st.get('label') or eng}」：{why}。请改用云端配音（Qwen3-TTS）或 Piper 等轻量引擎。",
-        )
+    if eng not in OPTIONAL_INSTALL:
+        st = check_engine(eng, cfg)
+        if not st.get("compatible", True):
+            min_v = st.get("min_vram_gb") or 0
+            missing = st.get("missing") or []
+            why = "；".join(str(m) for m in missing[:3]) if missing else f"本机显存不足（建议 ≥ {min_v:g}GB）"
+            raise HTTPException(
+                status_code=400,
+                detail=f"本机配置不支持「{st.get('label') or eng}」：{why}。请改用云端配音（Qwen3-TTS）或 Piper 等轻量引擎。",
+            )
 
     script_path = (SETUP_DIR / script).resolve()
     if not script_path.is_file() or script_path.parent != SETUP_DIR.resolve():
@@ -116,14 +122,20 @@ async def install_stream(engine: str = Query(...)):
                     progress = max(progress, 0.35)
                 elif any(k in low for k in ("install", "pip", "wheel", "解压")):
                     progress = max(progress, 0.55)
-                elif any(k in low for k in ("complete", "done", "成功", "finished")):
+                elif any(k in low for k in ("complete", "done", "成功", "finished", "rembg_ok", "playwright_ok")):
                     progress = max(progress, 0.88)
                 else:
                     progress = min(progress + 0.015, 0.92)
                 yield f"data: {json.dumps({'type': 'log', 'line': text, 'p': progress}, ensure_ascii=False)}\n\n"
         code = await proc.wait()
-        st = check_engine(eng, load_cfg())
-        yield f"data: {json.dumps({'type': 'done', 'exit_code': code, 'ready': st['ready'], 'missing': st['missing'], 'p': 1.0}, ensure_ascii=False)}\n\n"
+        if eng in OPTIONAL_INSTALL:
+            ready = code == 0
+            missing = [] if ready else [f"{eng} 安装失败（exit={code}）"]
+        else:
+            st = check_engine(eng, load_cfg())
+            ready = bool(st.get("ready"))
+            missing = list(st.get("missing") or [])
+        yield f"data: {json.dumps({'type': 'done', 'exit_code': code, 'ready': ready, 'missing': missing, 'p': 1.0}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         events(),

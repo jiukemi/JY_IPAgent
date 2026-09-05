@@ -605,6 +605,9 @@ def run_engine_install(
     allowed["whisper"] = "setup_whisper.ps1"
     allowed["funasr"] = "setup_funasr.ps1"
     allowed["local_whisper"] = "setup_whisper.ps1"
+    allowed["rembg"] = "setup_rembg.ps1"
+    allowed["playwright"] = "setup_playwright.ps1"
+    optional = {"rembg", "playwright"}
 
     def tick(p: float, msg: str) -> None:
         if on_progress:
@@ -618,14 +621,17 @@ def run_engine_install(
         raise ValueError(f"引擎 {eng} 不支持一键安装")
 
     cfg = load_cfg()
-    st = check_engine(eng if eng != "local_whisper" else "whisper", cfg)
-    if not st.get("compatible", True):
-        min_v = st.get("min_vram_gb") or 0
-        missing = st.get("missing") or []
-        why = "；".join(str(m) for m in missing[:3]) if missing else f"本机显存不足（建议 ≥ {min_v:g}GB）"
-        raise ValueError(
-            f"本机配置不支持「{st.get('label') or eng}」：{why}。请改用云端或 Piper 等轻量引擎。"
-        )
+    if eng not in optional:
+        st = check_engine(eng if eng != "local_whisper" else "whisper", cfg)
+        if not st.get("compatible", True):
+            min_v = st.get("min_vram_gb") or 0
+            missing = st.get("missing") or []
+            why = "；".join(str(m) for m in missing[:3]) if missing else f"本机显存不足（建议 ≥ {min_v:g}GB）"
+            raise ValueError(
+                f"本机配置不支持「{st.get('label') or eng}」：{why}。请改用云端或 Piper 等轻量引擎。"
+            )
+    else:
+        st = {"label": "封面抠图 rembg" if eng == "rembg" else "浏览器引擎 Playwright"}
 
     script_path = (setup_dir / script).resolve()
     if not script_path.is_file() or script_path.parent != setup_dir.resolve():
