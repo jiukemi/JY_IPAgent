@@ -1,6 +1,7 @@
 # CosyVoice2 setup (optional TTS backend)
 # Run: .\scripts\setup\setup_cosyvoice.ps1
 # Packaged: prefer %AGENT_RUNTIME_DIR%\engines\CosyVoice (writable).
+# Source: Git if available; otherwise GitHub ZIP mirrors (no system Git required).
 #Requires -Version 5.1
 param(
     [string]$Root = "",
@@ -9,6 +10,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "_project_root.ps1")
+. (Join-Path $PSScriptRoot "_repo_fetch.ps1")
 if (-not $Root) { $Root = $ProjectRoot }
 
 if (-not $InstallDir) {
@@ -26,6 +28,7 @@ $RepoUrl = "https://github.com/FunAudioLLM/CosyVoice.git"
 $RepoMirrors = @(
   "https://ghfast.top/https://github.com/FunAudioLLM/CosyVoice.git",
   "https://gitclone.com/github.com/FunAudioLLM/CosyVoice.git",
+  "https://kkgithub.com/FunAudioLLM/CosyVoice.git",
   $RepoUrl
 )
 
@@ -33,6 +36,12 @@ function Test-CosySource([string]$Dir) {
   return (Test-Path (Join-Path $Dir "requirements.txt")) -and (
     (Test-Path (Join-Path $Dir "cosyvoice")) -or (Test-Path (Join-Path $Dir "cosyvoice\cli"))
   )
+}
+
+function Test-MatchaPresent([string]$CosyDir) {
+  $a = Join-Path $CosyDir "third_party\Matcha-TTS"
+  $b = Join-Path $CosyDir "third_party\Matcha-TTS-main"
+  return (Test-Path $a) -or (Test-Path $b)
 }
 
 function Resolve-CosyInstallDir([string]$Preferred) {
@@ -45,6 +54,72 @@ function Resolve-CosyInstallDir([string]$Preferred) {
   $legacyNested = Join-Path $Root "tools\CosyVoice\CosyVoice"
   if (Test-CosySource $legacyNested) { return (Resolve-Path $legacyNested).Path }
   return $Preferred
+}
+
+function Ensure-MatchaSubmodule([string]$CosyDir) {
+  if (Test-MatchaPresent $CosyDir) { return $true }
+  $dest = Join-Path $CosyDir "third_party\Matcha-TTS"
+  New-Item -ItemType Directory -Force -Path (Split-Path $dest -Parent) | Out-Null
+  Write-Host "==> Fetch Matcha-TTS (CosyVoice submodule; needed when using ZIP)"
+  $gitUrls = @(
+    "https://ghfast.top/https://github.com/shivammehta25/Matcha-TTS.git",
+    "https://kkgithub.com/shivammehta25/Matcha-TTS.git",
+    "https://github.com/shivammehta25/Matcha-TTS.git"
+  )
+  foreach ($u in $gitUrls) {
+    if (Invoke-AgentGitClone -Url $u -TargetDir $dest) {
+      if (Test-MatchaPresent $CosyDir) { return $true }
+    }
+  }
+  $zipPath = Join-Path (Split-Path $CosyDir -Parent) "Matcha-TTS_src.zip"
+  $zipUrls = @(Get-AgentGithubZipUrls -OwnerRepo "shivammehta25/Matcha-TTS" -Ref "master")
+  $zipUrls += @(Get-AgentGithubZipUrls -OwnerRepo "shivammehta25/Matcha-TTS" -Ref "main")
+  foreach ($zu in $zipUrls) {
+    if (-not (Save-AgentUrlToFile -Url $zu -OutFile $zipPath -MinBytes 10000)) { continue }
+    if (Expand-AgentZipToDir -ZipPath $zipPath -TargetDir $dest) {
+      Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+      if (Test-MatchaPresent $CosyDir) { return $true }
+    }
+    Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $dest -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  Write-Host "WARN: Matcha-TTS missing; verify step may fail. Re-run install or install Git and retry."
+  return $false
+}
+
+function Fetch-CosySource([string]$Target) {
+  $git = Get-AgentGitExe
+  if ($git) {
+    Write-Host "==> Git found: $git"
+    foreach ($url in $RepoMirrors) {
+      if (Invoke-AgentGitClone -Url $url -TargetDir $Target -Recursive) {
+        if (Test-CosySource $Target) { return $true }
+      }
+    }
+  } else {
+    Write-Host "==> 本机未检测到 Git，改用 ZIP 下载源码（无需安装 Git）"
+    Write-Host "    可选：安装 Git for Windows 后重试更稳 https://git-scm.com/download/win"
+  }
+
+  Write-Host "==> try ZIP mirrors (no git / git failed)"
+  $parent = Split-Path $Target -Parent
+  $zipPath = Join-Path $parent "CosyVoice_src.zip"
+  $zipUrls = @(Get-AgentGithubZipUrls -OwnerRepo "FunAudioLLM/CosyVoice" -Ref "main")
+  foreach ($zu in $zipUrls) {
+    Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+    if (-not (Save-AgentUrlToFile -Url $zu -OutFile $zipPath -MinBytes 50000)) { continue }
+    Write-Host "==> expand zip -> $Target"
+    if (Expand-AgentZipToDir -ZipPath $zipPath -TargetDir $Target) {
+      Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+      if (Test-CosySource $Target) {
+        [void](Ensure-MatchaSubmodule $Target)
+        return $true
+      }
+    }
+    Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $Target -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  return $false
 }
 
 Write-Host "==> Root=$Root"
@@ -60,32 +135,27 @@ if (-not (Test-CosySource $InstallDir)) {
     Write-Host "==> Found CosyVoice source in parent; using $parent"
     $InstallDir = (Resolve-Path $parent).Path
   } else {
-    Write-Host "==> Clone CosyVoice into $InstallDir"
+    Write-Host "==> Fetch CosyVoice into $InstallDir"
     if (Test-Path $InstallDir) {
-      # Incomplete dir (e.g. empty nested path from old script) — remove and recloning
       if (-not (Test-CosySource $InstallDir)) {
         Write-Host "==> Removing incomplete InstallDir"
         Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
       }
     }
-    $cloned = $false
-    foreach ($url in $RepoMirrors) {
-      Write-Host "==> try git clone $url"
-      try {
-        & git clone --recursive --depth 1 $url $InstallDir
-        if ($LASTEXITCODE -eq 0 -and (Test-CosySource $InstallDir)) {
-          $cloned = $true
-          break
-        }
-      } catch {
-        Write-Host "!! clone failed: $($_.Exception.Message)"
-      }
-      if (Test-Path $InstallDir) {
-        Remove-Item -Recurse -Force $InstallDir -ErrorAction SilentlyContinue
-      }
-    }
-    if (-not $cloned) {
-      throw "Failed to clone CosyVoice (all mirrors). Install Git and retry, or check network."
+    if (-not (Fetch-CosySource $InstallDir)) {
+      throw @"
+无法获取 CosyVoice 源码（Git 镜像与 ZIP 均失败）。
+
+常见原因：本机没有 Git，且 GitHub ZIP 也被网络拦截。
+请任选其一后重试：
+1) 安装 Git for Windows：https://git-scm.com/download/win
+2) 浏览器打开并下载 ZIP，解压到：
+   $InstallDir
+   （目录内需有 requirements.txt 与 cosyvoice\ 文件夹）
+   https://github.com/FunAudioLLM/CosyVoice/archive/refs/heads/main.zip
+
+目标目录：$InstallDir
+"@
     }
   }
 }
@@ -95,6 +165,7 @@ Write-Host "==> Using source at $InstallDir"
 if (-not (Test-CosySource $InstallDir)) {
   throw "CosyVoice requirements.txt missing under $InstallDir"
 }
+[void](Ensure-MatchaSubmodule $InstallDir)
 
 Set-Location $InstallDir
 
@@ -112,6 +183,11 @@ if (-not (Test-Path $py)) {
       }
       if ($out) { $sysPy = ($out | Select-Object -First 1).ToString().Trim(); break }
     } catch { }
+  }
+  # Packaged desktop: prefer runtime venv python if present
+  if (-not $sysPy -and $env:AGENT_RUNTIME_DIR) {
+    $rtPy = Join-Path $env:AGENT_RUNTIME_DIR "venv\Scripts\python.exe"
+    if (Test-Path $rtPy) { $sysPy = $rtPy }
   }
   if (-not $sysPy) { throw "No system Python for CosyVoice venv" }
   & $sysPy -m venv venv

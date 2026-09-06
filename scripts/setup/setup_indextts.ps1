@@ -44,11 +44,19 @@ function Copy-IndexTtsTree([string]$From, [string]$To) {
 }
 
 function Get-GitExe {
+    # Prefer shared helper if present (PATH + common install dirs)
+    $shared = Join-Path $PSScriptRoot "_repo_fetch.ps1"
+    if (Test-Path $shared) {
+        . $shared
+        $g = Get-AgentGitExe
+        if ($g) { return $g }
+    }
     $cmd = Get-Command git -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
     foreach ($p in @(
         "C:\Program Files\Git\cmd\git.exe",
-        "C:\Program Files (x86)\Git\cmd\git.exe"
+        "C:\Program Files (x86)\Git\cmd\git.exe",
+        "$env:LOCALAPPDATA\Programs\Git\cmd\git.exe"
     )) {
         if (Test-Path $p) { return $p }
     }

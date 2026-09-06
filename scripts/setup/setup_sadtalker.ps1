@@ -1,5 +1,6 @@
 # SadTalker setup for Windows (image + audio -> talking video)
 # Run: .\scripts\setup\setup_sadtalker.ps1
+# Source: Git if available; otherwise GitHub ZIP (no system Git required).
 
 param(
     [string]$InstallDir = ""
@@ -7,16 +8,56 @@ param(
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "_project_root.ps1")
+. (Join-Path $PSScriptRoot "_repo_fetch.ps1")
 if (-not $InstallDir) { $InstallDir = Join-Path $ProjectRoot "tools\SadTalker" }
 
 Write-Host "==> SadTalker setup -> $InstallDir"
 
-if (-not (Test-Path $InstallDir)) {
-    New-Item -ItemType Directory -Path $InstallDir | Out-Null
+function Test-SadSource([string]$Dir) {
+  return (Test-Path (Join-Path $Dir "inference.py")) -or (Test-Path (Join-Path $Dir "requirements.txt"))
 }
 
-if (-not (Test-Path "$InstallDir\.git")) {
-    git clone https://github.com/OpenTalker/SadTalker.git $InstallDir
+if (-not (Test-SadSource $InstallDir)) {
+    New-Item -ItemType Directory -Force -Path (Split-Path $InstallDir -Parent) | Out-Null
+    $got = $false
+    $gitUrls = @(
+      "https://ghfast.top/https://github.com/OpenTalker/SadTalker.git",
+      "https://kkgithub.com/OpenTalker/SadTalker.git",
+      "https://github.com/OpenTalker/SadTalker.git"
+    )
+    if (Get-AgentGitExe) {
+      foreach ($u in $gitUrls) {
+        if (Invoke-AgentGitClone -Url $u -TargetDir $InstallDir) {
+          if (Test-SadSource $InstallDir) { $got = $true; break }
+        }
+      }
+    } else {
+      Write-Host "==> 本机未检测到 Git，改用 ZIP 下载 SadTalker"
+    }
+    if (-not $got) {
+      $zipPath = Join-Path (Split-Path $InstallDir -Parent) "SadTalker_src.zip"
+      foreach ($zu in (Get-AgentGithubZipUrls -OwnerRepo "OpenTalker/SadTalker" -Ref "master")) {
+        if (-not (Save-AgentUrlToFile -Url $zu -OutFile $zipPath -MinBytes 50000)) { continue }
+        if (Expand-AgentZipToDir -ZipPath $zipPath -TargetDir $InstallDir) {
+          Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+          if (Test-SadSource $InstallDir) { $got = $true; break }
+        }
+        Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+      }
+      if (-not $got) {
+        foreach ($zu in (Get-AgentGithubZipUrls -OwnerRepo "OpenTalker/SadTalker" -Ref "main")) {
+          if (-not (Save-AgentUrlToFile -Url $zu -OutFile $zipPath -MinBytes 50000)) { continue }
+          if (Expand-AgentZipToDir -ZipPath $zipPath -TargetDir $InstallDir) {
+            Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+            if (Test-SadSource $InstallDir) { $got = $true; break }
+          }
+          Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+        }
+      }
+    }
+    if (-not $got) {
+      throw "无法获取 SadTalker 源码。请安装 Git，或手动下载 ZIP 解压到 $InstallDir"
+    }
 }
 
 Set-Location $InstallDir

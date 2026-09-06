@@ -2,6 +2,14 @@
 
 本文件使用中文记录面向用户的版本说明。发版时 GitHub / Gitee Release 正文与此处保持一致。
 
+## 0.1.27 — 2026-09-06
+
+> **已装好引擎的用户可跳过。** 本版修复「本机没有 Git」时 CosyVoice / SadTalker 等安装秒失败。
+
+### 修复
+- 引擎安装：未安装 Git 或不在 PATH 时，不再直接 `git clone` 报错退出；改为探测常见 Git 安装路径，失败则用 **GitHub ZIP 镜像**拉取源码（CosyVoice 会补 Matcha-TTS 子模块）。
+- IndexTTS：同样补全 `LOCALAPPDATA\Programs\Git` 探测（原先已有 ZIP 回退，有 Git 未进 PATH 的用户更稳）。
+
 ## 0.1.26 — 2026-09-05
 
 > **已装好口播的用户可跳过。** 上一版提示「桌面已生成脚本」但部分机器桌面并无文件——非常抱歉。
