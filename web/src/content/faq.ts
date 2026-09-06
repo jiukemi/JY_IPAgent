@@ -17,7 +17,7 @@ export const FAQ_ITEMS: FaqItem[] = [
     id: 'docker-drive',
     q: 'Docker Desktop 只能装 C 盘、体积太大，或注册页打不开？',
     a:
-      '请先自行下载「Docker Desktop Installer.exe」，再到「设置 → 特殊引擎安装 → 口播引擎安装向导」：扫描/选择安装包 → 选盘 → 安装到所选目录。个人使用通常不必注册 Docker Hub，登录窗可跳过；验收以本机 docker info 成功为准。',
+      '请先自行下载完整的「Docker Desktop Installer.exe」（通常约 500MB+，资源管理器里看文件大小）。再到「设置 → 特殊引擎安装 → 口播引擎安装向导」：扫描/选择安装包 → 选盘 → 安装到所选目录。扫描到文件但只有一两百 MB，多半是下残了，几秒就会失败。个人使用通常不必注册 Docker Hub，登录窗可跳过；验收以本机 docker info 成功为准。',
   },
   {
     id: 'extract-script',

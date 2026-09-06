@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -94,10 +95,9 @@ def list_install_drives() -> list[dict[str, Any]]:
     return out
 
 
-# Official installer is typically ~400–600MB. Old 50MB gate accepted truncated
-# downloads (e.g. exactly 51_000_000), which then fail as admin with exit code 3
-# ("The system cannot find the path specified").
-_DOCKER_INSTALLER_MIN_BYTES = 200_000_000
+# Official installer is typically ~500–700MB. Gates below 400MB still let through
+# truncated downloads that then fail as admin in a few seconds (exit 3 / path errors).
+_DOCKER_INSTALLER_MIN_BYTES = 400_000_000
 
 
 def _installer_cache_path() -> Path:
@@ -110,8 +110,17 @@ def _installer_size_hint(n: int) -> str:
 
 
 def _installer_looks_valid(path: Path) -> bool:
+    """Complete-enough Docker Desktop Installer.exe (size + PE header)."""
     try:
-        return path.is_file() and path.stat().st_size >= _DOCKER_INSTALLER_MIN_BYTES
+        if not path.is_file():
+            return False
+        size = path.stat().st_size
+        if size < _DOCKER_INSTALLER_MIN_BYTES:
+            return False
+        with path.open("rb") as fh:
+            if fh.read(2) != b"MZ":
+                return False
+        return True
     except OSError:
         return False
 
@@ -131,17 +140,26 @@ def _purge_truncated_installer(path: Path) -> None:
         pass
 
 
-def _normalize_installer_path(installer: Path) -> Path:
+def _normalize_installer_path(
+    installer: Path,
+    *,
+    prefer_root: Path | None = None,
+) -> Path:
     """Copy installer to a no-space path so cmd.exe / UAC never break on spaces.
 
-    Official name is ``Docker Desktop Installer.exe``; Downloads folders may also
-    contain spaces (e.g. ``C:\\Users\\Foo Bar\\Downloads\\...``).
-
-    We **copy** (do not rename the user's download) so the original official
-    filename stays in 下载/Downloads for the user to find again.
+    Prefer ``prefer_root\\DockerDesktopInstaller.exe`` (target install drive) so
+    elevated install does not depend on a tiny/locked C: LOCALAPPDATA copy.
+    Falls back to %LOCALAPPDATA%\\JY_IPAgent\\DockerDesktopInstaller.exe.
     """
     src = installer.expanduser().resolve()
-    dest = _installer_cache_path()
+    if prefer_root is not None:
+        try:
+            prefer_root.mkdir(parents=True, exist_ok=True)
+            dest = (prefer_root / "DockerDesktopInstaller.exe").resolve()
+        except OSError:
+            dest = _installer_cache_path()
+    else:
+        dest = _installer_cache_path()
     _purge_truncated_installer(dest)
     if not _installer_looks_valid(src):
         size = 0
@@ -152,10 +170,9 @@ def _normalize_installer_path(installer: Path) -> Path:
         raise RuntimeError(
             f"安装包无效或不完整：{src}（{_installer_size_hint(size)}，"
             f"完整包通常约 500MB+，至少需 {_installer_size_hint(_DOCKER_INSTALLER_MIN_BYTES)}）。"
-            "请用浏览器/夸克重新下载「Docker Desktop Installer.exe」后再扫描。"
+            "「扫描到文件」不等于「下完整了」。请用浏览器/夸克重新下载后再扫描。"
         )
     dest.parent.mkdir(parents=True, exist_ok=True)
-    # Already the cache file and name has no spaces
     try:
         if src.resolve() == dest.resolve():
             return dest
@@ -169,14 +186,13 @@ def _normalize_installer_path(installer: Path) -> Path:
         or (dest.is_file() and dest.stat().st_size != src.stat().st_size)
     )
     if need_copy:
-        # Skip copy if same size already cached (resume-friendly)
         try:
             if dest.is_file() and dest.stat().st_size == src.stat().st_size:
                 return dest
         except OSError:
             pass
         _set_docker_install(
-            message=f"安装包路径/文件名含空格，正在复制为无空格文件：{dest}…",
+            message=f"正在把安装包复制到无空格路径（约 {_installer_size_hint(src.stat().st_size)}，请稍候）：{dest}",
         )
         shutil.copy2(src, dest)
     if not _installer_looks_valid(dest):
@@ -405,75 +421,112 @@ def _download_docker_installer(dest: Path) -> None:
 
 
 def _write_docker_install_cmd(installer: Path, install_root: Path) -> Path:
-    """Write install .cmd to Desktop / Downloads / install_root (ASCII name, verified)."""
-    installer = _normalize_installer_path(installer)
-    # Only ensure parent root exists; do NOT pre-create DockerDesktop/wsl as the
-    # non-elevated user — leftover ACLs break the elevated installer.
+    """Write install .cmd (+ .ps1) to Desktop / Downloads / install_root."""
+    # Stage installer onto the *target* drive (no spaces). Avoid C: LOCALAPPDATA-only copies.
     install_root.mkdir(parents=True, exist_ok=True)
+    installer = _normalize_installer_path(installer, prefer_root=install_root)
+    try:
+        _normalize_installer_path(installer, prefer_root=_installer_cache_path().parent)
+    except Exception:
+        pass
+
     app_dir = install_root / "DockerDesktop"
     wsl_root = install_root / "wsl"
-    win_root = install_root / "windows-containers"
+    log_path = install_root / "jy-docker-install.log"
 
-    exe = str(installer)
-    app_s, wsl_s, win_s = str(app_dir), str(wsl_root), str(win_root)
-    # ASCII filename only — Chinese names vanished for many users (redirected Desktop / encoding).
+    exe = str(installer.resolve())
+    app_s = str(app_dir)
+    wsl_s = str(wsl_root)
+    log_s = str(log_path)
     cmd_name = "JY-Install-Docker.cmd"
-    # Official / community recipe: start /wait "" "Installer.exe" install ...
-    # Quote every path; create target dirs only after elevation.
-    lines = [
-        "@echo off",
-        "chcp 65001 >nul",
-        "setlocal EnableExtensions",
-        "title JY_IPAgent - Install Docker Desktop",
-        f'set "JY_DOCKER_EXE={exe}"',
-        f'set "JY_DOCKER_APP={app_s}"',
-        f'set "JY_DOCKER_WSL={wsl_s}"',
-        f'set "JY_DOCKER_WIN={win_s}"',
-        "echo ========================================",
-        "echo  JY_IPAgent: install Docker to selected drive",
-        "echo  Target: " + str(install_root),
-        "echo  Installer: %JY_DOCKER_EXE%",
-        "echo ========================================",
-        "echo.",
-        'if not exist "%JY_DOCKER_EXE%" (',
-        "  echo [FAILED] installer exe not found",
-        "  echo path: %JY_DOCKER_EXE%",
-        "  echo Please re-download Docker Desktop Installer.exe ~500MB+",
-        "  pause",
-        "  exit /b 3",
+    ps_name = "JY-Install-Docker.ps1"
+    min_bytes = int(_DOCKER_INSTALLER_MIN_BYTES)
+
+    ps_lines = [
+        "$ErrorActionPreference = 'Stop'",
+        f"$exe = {json.dumps(exe)}",
+        f"$app = {json.dumps(app_s)}",
+        f"$wsl = {json.dumps(wsl_s)}",
+        f"$log = {json.dumps(log_s)}",
+        f"$minBytes = {min_bytes}",
+        "Write-Host '========================================'",
+        "Write-Host ' JY_IPAgent: install Docker to selected drive'",
+        'Write-Host (" Target: " + (Split-Path $app -Parent))',
+        'Write-Host (" Installer: " + $exe)',
+        'Write-Host (" Log: " + $log)',
+        "Write-Host '========================================'",
+        "if (-not (Test-Path -LiteralPath $exe)) {",
+        "  Write-Host '[FAILED] installer exe not found'",
+        "  Write-Host $exe",
+        "  Read-Host 'Press Enter to close'",
+        "  exit 3",
+        "}",
+        "$size = (Get-Item -LiteralPath $exe).Length",
+        'Write-Host ("Installer size bytes: " + $size)',
+        "if ($size -lt $minBytes) {",
+        "  Write-Host ('[FAILED] installer too small / truncated (' + $size + ' bytes)')",
+        "  Write-Host 'Full package is usually ~500MB+. Re-download and scan again.'",
+        "  Read-Host 'Press Enter to close'",
+        "  exit 3",
+        "}",
+        "New-Item -ItemType Directory -Force -Path $app | Out-Null",
+        "New-Item -ItemType Directory -Force -Path $wsl | Out-Null",
+        '"=== JY Docker install $(Get-Date -Format o) ===`nexe=$exe`napp=$app`nwsl=$wsl`nsize=$size`n" | Set-Content -LiteralPath $log -Encoding UTF8',
+        "Write-Host ''",
+        "Write-Host 'Starting Docker Desktop installer (admin)...'",
+        "Write-Host 'This normally takes several minutes.'",
+        "Write-Host 'If it fails in a few seconds, the installer file is incomplete - re-download.'",
+        "Write-Host ''",
+        "$argList = @(",
+        "  'install',",
+        "  '-accept-license',",
+        "  ('--installation-dir=' + $app),",
+        "  ('--wsl-default-data-root=' + $wsl)",
         ")",
-        'for %%A in ("%JY_DOCKER_EXE%") do set "JY_DOCKER_SIZE=%%~zA"',
-        "echo Installer size bytes: %JY_DOCKER_SIZE%",
-        'if %JY_DOCKER_SIZE% LSS 200000000 (',
-        "  echo [FAILED] installer too small / truncated ^(%JY_DOCKER_SIZE% bytes^)",
-        "  echo Full package is usually ~500MB+. Re-download and scan again.",
-        "  pause",
-        "  exit /b 3",
-        ")",
-        'if not exist "%JY_DOCKER_APP%" mkdir "%JY_DOCKER_APP%"',
-        'if not exist "%JY_DOCKER_WSL%" mkdir "%JY_DOCKER_WSL%"',
-        'if not exist "%JY_DOCKER_WIN%" mkdir "%JY_DOCKER_WIN%"',
-        "echo.",
-        "echo Starting Docker Desktop installer ^(admin^)...",
-        'start /wait "" "%JY_DOCKER_EXE%" install -accept-license --installation-dir="%JY_DOCKER_APP%" --wsl-default-data-root="%JY_DOCKER_WSL%" --windows-containers-default-data-root="%JY_DOCKER_WIN%"',
-        "set ERR=%ERRORLEVEL%",
-        "echo.",
-        "if not %ERR%==0 (",
-        "  echo [FAILED] exit code %ERR%",
-        "  echo Tip: delete leftover folders under the target drive and retry;",
-        "  echo also try deleting C:\\ProgramData\\DockerDesktop if a prior failed install left it.",
-        "  pause",
-        "  exit /b %ERR%",
-        ")",
-        "echo [OK] Close this window, then open Docker Desktop.",
-        "pause",
-        "exit /b 0",
+        "try {",
+        "  $p = Start-Process -FilePath $exe -ArgumentList $argList -Wait -PassThru",
+        "  $code = [int]$p.ExitCode",
+        "} catch {",
+        "  $_ | Out-String | Add-Content -LiteralPath $log -Encoding UTF8",
+        "  Write-Host ('[FAILED] ' + $_)",
+        "  Read-Host 'Press Enter to close'",
+        "  exit 1",
+        "}",
+        '("exit=$code") | Add-Content -LiteralPath $log -Encoding UTF8',
+        "Write-Host ''",
+        "if ($code -ne 0) {",
+        "  Write-Host ('[FAILED] exit code ' + $code)",
+        "  Write-Host 'Failing in a few seconds usually means a truncated installer (~500MB+ needed),'",
+        "  Write-Host 'or leftover folders / ACL issues on the target drive.'",
+        "  Write-Host 'Fix: re-download Installer.exe; delete target Docker folder; optional delete C:\\ProgramData\\DockerDesktop'",
+        "  Write-Host ('Log: ' + $log)",
+        "  Read-Host 'Press Enter to close'",
+        "  exit $code",
+        "}",
+        "Write-Host '[OK] Install finished. Open Docker Desktop, skip login, wait tray ready.'",
+        "Write-Host 'Then return to JY wizard and click redetect.'",
+        "Read-Host 'Press Enter to close'",
+        "exit 0",
         "",
     ]
-    body = "\r\n".join(lines)
+    ps_body = "\r\n".join(ps_lines)
+
+    cmd_lines = [
+        "@echo off",
+        "chcp 65001 >nul",
+        "setlocal",
+        f'set "JY_PS=%~dp0{ps_name}"',
+        'if not exist "%JY_PS%" (',
+        f'  set "JY_PS={install_root / ps_name}"',
+        ")",
+        'powershell -NoProfile -ExecutionPolicy Bypass -File "%JY_PS%"',
+        "set ERR=%ERRORLEVEL%",
+        "exit /b %ERR%",
+        "",
+    ]
+    body = "\r\n".join(cmd_lines)
 
     candidates: list[Path] = []
-    # Real shell Desktop (handles OneDrive redirect)
     try:
         import ctypes
 
@@ -510,16 +563,19 @@ def _write_docker_install_cmd(installer: Path, install_root: Path) -> Path:
             desk.mkdir(parents=True, exist_ok=True)
             if not desk.is_dir():
                 continue
-            p = desk / cmd_name
-            p.write_text(body, encoding="utf-8")
-            if p.is_file() and p.stat().st_size > 50:
-                written.append(p.resolve())
+            ps_path = desk / ps_name
+            ps_path.write_text(ps_body, encoding="utf-8")
+            cmd_path = desk / cmd_name
+            cmd_path.write_text(body, encoding="utf-8")
+            if cmd_path.is_file() and cmd_path.stat().st_size > 20 and ps_path.is_file():
+                written.append(cmd_path.resolve())
         except OSError:
             continue
 
     if not written:
         cache = _installer_cache_path().parent
         cache.mkdir(parents=True, exist_ok=True)
+        (cache / ps_name).write_text(ps_body, encoding="utf-8")
         cache_cmd = cache / cmd_name
         cache_cmd.write_text(body, encoding="utf-8")
         if not cache_cmd.is_file():
@@ -650,11 +706,12 @@ def prepare_docker_desktop_install(
             "-accept-license",
             f"--installation-dir={install_root / 'DockerDesktop'}",
             f"--wsl-default-data-root={install_root / 'wsl'}",
-            f"--windows-containers-default-data-root={install_root / 'windows-containers'}",
         ],
         "message": (
-            f"已准备安装：{normalized.name} → {install_root}。"
-            f"脚本路径（若存在）：{cmd_path}"
+            f"安装脚本已生成（尚未装完）：将用 {normalized.name} 装到 {install_root}。"
+            f"接下来会请求管理员权限；真正安装通常要几分钟。"
+            f"若几秒就失败，请看目标盘 jy-docker-install.log，多半是安装包未下完整（需约 500MB+）。"
+            f"脚本：{cmd_path}"
         ),
     }
 

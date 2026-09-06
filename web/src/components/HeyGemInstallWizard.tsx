@@ -207,7 +207,7 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
           return
         }
         setAlert({
-          title: elev.ok ? '脚本已写入（已校验）' : '请手动运行脚本',
+          title: elev.ok ? '已启动管理员安装（尚未装完）' : '请手动运行脚本',
           message:
             `${elev.message || ''}\n\n` +
             `安装包：${prep.installer || installerPath}\n` +
@@ -215,7 +215,8 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
             `请找英文文件：JY-Install-Docker.cmd\n` +
             `已确认存在：${deskFile}\n` +
             (paths.length > 1 ? `其它备份：\n${paths.filter((p) => p !== deskFile).join('\n')}\n` : '') +
-            `右键 →「以管理员身份运行」。`,
+            `正常安装要几分钟。若几秒就失败：安装包多半没下完整（需约 500MB+），` +
+            `请重新下载后再扫；也可看目标盘 jy-docker-install.log。`,
           variant: elev.ok ? 'info' : 'warning',
         })
         try {

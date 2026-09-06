@@ -1104,10 +1104,10 @@ function registerSplashIpc() {
   ipcMain.handle('desktop:elevate-docker-install', async (_e, payload) => {
     const installer = typeof payload?.installer === 'string' ? payload.installer.trim() : ''
     const installRoot = typeof payload?.install_root === 'string' ? payload.install_root.trim() : ''
+    const prepCmd = typeof payload?.cmd_path === 'string' ? payload.cmd_path.trim() : ''
     const args = Array.isArray(payload?.args) ? payload.args.map(String) : []
-    // Real Docker Desktop Installer is typically 400–600MB. A former 50MB gate
-    // accepted truncated caches (~51MB) that then fail as admin with exit code 3.
-    const MIN_INSTALLER_BYTES = 200_000_000
+    // Official installer ~500–700MB. Below 400MB is almost always truncated and fails in seconds.
+    const MIN_INSTALLER_BYTES = 400_000_000
 
     let exe = installer && fs.existsSync(installer) ? path.resolve(installer) : ''
     if (!exe) {
@@ -1120,7 +1120,6 @@ function registerSplashIpc() {
       exeSize = 0
     }
     if (exeSize < MIN_INSTALLER_BYTES) {
-      // Drop truncated LOCALAPPDATA cache so the next scan cannot reuse it.
       try {
         const cache = path.join(process.env.LOCALAPPDATA || '', 'JY_IPAgent', 'DockerDesktopInstaller.exe')
         if (cache && fs.existsSync(cache) && fs.statSync(cache).size < MIN_INSTALLER_BYTES) {
@@ -1134,8 +1133,8 @@ function registerSplashIpc() {
         verified: false,
         message:
           `安装包不完整（仅 ${(exeSize / (1024 * 1024)).toFixed(0)} MB）。\n` +
-          '完整「Docker Desktop Installer.exe」通常约 500MB+。\n' +
-          '请用浏览器/夸克重新下载后，在向导里「扫描本机安装包」再安装。\n' +
+          '「扫描到文件」≠「下完整了」。完整包通常约 500MB+（至少约 400MB）。\n' +
+          '请用浏览器/夸克重新下载后，再「扫描本机安装包」→「安装到所选盘」。\n' +
           `当前文件：${exe}`,
       }
     }
@@ -1143,180 +1142,153 @@ function registerSplashIpc() {
       return { ok: false, message: '未指定安装目标磁盘。', verified: false }
     }
 
-    // Prefer no-space cache path under LOCALAPPDATA for the elevated .cmd
-    const cacheExe = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'JY_IPAgent', 'DockerDesktopInstaller.exe')
-    try {
-      fs.mkdirSync(path.dirname(cacheExe), { recursive: true })
-      const needCopy =
-        exe.toLowerCase() !== cacheExe.toLowerCase() &&
-        (/\s/.test(exe) || path.basename(exe) !== 'DockerDesktopInstaller.exe' || !fs.existsSync(cacheExe))
-      if (needCopy) {
-        let same = false
-        try {
-          same = fs.existsSync(cacheExe) && fs.statSync(cacheExe).size === exeSize
-        } catch {
-          same = false
-        }
-        if (!same) fs.copyFileSync(exe, cacheExe)
-      }
-      if (fs.existsSync(cacheExe) && fs.statSync(cacheExe).size >= MIN_INSTALLER_BYTES) {
-        exe = cacheExe
-        exeSize = fs.statSync(cacheExe).size
-      }
-    } catch {
-      /* keep original exe */
-    }
-
-    const appDir = path.join(installRoot, 'DockerDesktop')
-    const wslRoot = path.join(installRoot, 'wsl')
-    const winRoot = path.join(installRoot, 'windows-containers')
-    // Only create the parent install root as the current user. Pre-creating
-    // DockerDesktop/wsl without elevation can leave ACLs that break install.
+    // Stage onto target drive (same place Python prepare uses).
     try {
       fs.mkdirSync(installRoot, { recursive: true })
     } catch {
       /* ignore */
     }
+    const driveExe = path.join(installRoot, 'DockerDesktopInstaller.exe')
+    try {
+      const same =
+        path.resolve(exe).toLowerCase() === path.resolve(driveExe).toLowerCase() ||
+        (fs.existsSync(driveExe) && fs.statSync(driveExe).size === exeSize)
+      if (!same) fs.copyFileSync(exe, driveExe)
+      if (fs.existsSync(driveExe) && fs.statSync(driveExe).size >= MIN_INSTALLER_BYTES) {
+        exe = driveExe
+        exeSize = fs.statSync(driveExe).size
+      }
+    } catch {
+      /* keep original exe */
+    }
 
-    // ASCII-only filename — Chinese names + redirected Desktop caused "提示有文件、桌面没有" complaints.
     const CMD_NAME = 'JY-Install-Docker.cmd'
-    const cmdBody = [
-      '@echo off',
-      'chcp 65001 >nul',
-      'setlocal EnableExtensions',
-      'title JY_IPAgent - Install Docker Desktop',
-      `set "JY_DOCKER_EXE=${exe}"`,
-      `set "JY_DOCKER_APP=${appDir}"`,
-      `set "JY_DOCKER_WSL=${wslRoot}"`,
-      `set "JY_DOCKER_WIN=${winRoot}"`,
-      'echo ========================================',
-      'echo  JY_IPAgent: install Docker to selected drive',
-      `echo  Target: ${installRoot}`,
-      'echo  Installer: %JY_DOCKER_EXE%',
-      'echo ========================================',
-      'echo.',
-      'if not exist "%JY_DOCKER_EXE%" (',
-      '  echo [FAILED] installer exe not found',
-      '  echo path: %JY_DOCKER_EXE%',
-      '  echo Please re-download Docker Desktop Installer.exe ~500MB+',
-      '  pause',
-      '  exit /b 3',
-      ')',
-      'for %%A in ("%JY_DOCKER_EXE%") do set "JY_DOCKER_SIZE=%%~zA"',
-      'echo Installer size bytes: %JY_DOCKER_SIZE%',
-      'if %JY_DOCKER_SIZE% LSS 200000000 (',
-      '  echo [FAILED] installer too small / truncated ^(%JY_DOCKER_SIZE% bytes^)',
-      '  echo Full package is usually ~500MB+. Re-download and scan again.',
-      '  pause',
-      '  exit /b 3',
-      ')',
-      'if not exist "%JY_DOCKER_APP%" mkdir "%JY_DOCKER_APP%"',
-      'if not exist "%JY_DOCKER_WSL%" mkdir "%JY_DOCKER_WSL%"',
-      'if not exist "%JY_DOCKER_WIN%" mkdir "%JY_DOCKER_WIN%"',
-      'echo.',
-      'echo Starting Docker Desktop installer ^(admin^)...',
-      'start /wait "" "%JY_DOCKER_EXE%" install -accept-license --installation-dir="%JY_DOCKER_APP%" --wsl-default-data-root="%JY_DOCKER_WSL%" --windows-containers-default-data-root="%JY_DOCKER_WIN%"',
-      'set ERR=%ERRORLEVEL%',
-      'echo.',
-      'if not %ERR%==0 (',
-      '  echo [FAILED] exit code %ERR%',
-      '  echo Tip: delete leftover folders under the target drive and retry;',
-      '  echo also try deleting C:\\ProgramData\\DockerDesktop if a prior failed install left it.',
-      '  pause',
-      '  exit /b %ERR%',
-      ')',
-      'echo [OK] Close this window, then open Docker Desktop.',
-      'pause',
-      'exit /b 0',
-      '',
-    ].join('\r\n')
+    const PS_NAME = 'JY-Install-Docker.ps1'
+    const appDir = path.join(installRoot, 'DockerDesktop')
+    const wslRoot = path.join(installRoot, 'wsl')
+    const logPath = path.join(installRoot, 'jy-docker-install.log')
 
-    const dirCandidates = []
-    const pushDir = (p) => {
-      if (!p || typeof p !== 'string') return
-      try {
-        const resolved = path.resolve(p.trim())
-        if (!resolved || dirCandidates.includes(resolved)) return
-        fs.mkdirSync(resolved, { recursive: true })
-        if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
-          dirCandidates.push(resolved)
+    // Prefer scripts already written by Python prepare_only (includes .ps1).
+    // Do not overwrite a good prepare with an older Electron batch recipe.
+    let pick = ''
+    const written = []
+    if (prepCmd && fs.existsSync(prepCmd) && fs.statSync(prepCmd).size > 20) {
+      pick = path.resolve(prepCmd)
+      written.push(pick)
+      const siblingPs = path.join(path.dirname(pick), PS_NAME)
+      if (!fs.existsSync(siblingPs)) {
+        // Fall through to rewrite both files below
+        pick = ''
+        written.length = 0
+      }
+    }
+
+    if (!pick) {
+      const psBody = [
+        "$ErrorActionPreference = 'Stop'",
+        `$exe = ${JSON.stringify(exe)}`,
+        `$app = ${JSON.stringify(appDir)}`,
+        `$wsl = ${JSON.stringify(wslRoot)}`,
+        `$log = ${JSON.stringify(logPath)}`,
+        `$minBytes = ${MIN_INSTALLER_BYTES}`,
+        "Write-Host '========================================'",
+        "Write-Host ' JY_IPAgent: install Docker to selected drive'",
+        'Write-Host (" Installer: " + $exe)',
+        'Write-Host (" Log: " + $log)',
+        "Write-Host '========================================'",
+        'if (-not (Test-Path -LiteralPath $exe)) { Write-Host "[FAILED] installer missing"; Read-Host "Enter"; exit 3 }',
+        '$size = (Get-Item -LiteralPath $exe).Length',
+        'Write-Host ("Installer size bytes: " + $size)',
+        'if ($size -lt $minBytes) { Write-Host "[FAILED] truncated"; Read-Host "Enter"; exit 3 }',
+        'New-Item -ItemType Directory -Force -Path $app,$wsl | Out-Null',
+        '"=== JY Docker install ===" | Set-Content -LiteralPath $log -Encoding UTF8',
+        "Write-Host 'Starting installer (usually several minutes; a few seconds = truncated package)...'",
+        "$argList = @('install','-accept-license',('--installation-dir=' + $app),('--wsl-default-data-root=' + $wsl))",
+        '$p = Start-Process -FilePath $exe -ArgumentList $argList -Wait -PassThru',
+        '$code = [int]$p.ExitCode',
+        '("exit=" + $code) | Add-Content -LiteralPath $log -Encoding UTF8',
+        'if ($code -ne 0) { Write-Host ("[FAILED] exit " + $code); Write-Host ("Log: " + $log); Read-Host "Enter"; exit $code }',
+        "Write-Host '[OK] Open Docker Desktop, skip login, then redetect in wizard.'",
+        'Read-Host "Enter"',
+        'exit 0',
+        '',
+      ].join('\r\n')
+      const cmdBody = [
+        '@echo off',
+        'chcp 65001 >nul',
+        'setlocal',
+        `set "JY_PS=%~dp0${PS_NAME}"`,
+        'if not exist "%JY_PS%" (',
+        `  set "JY_PS=${path.join(installRoot, PS_NAME)}"`,
+        ')',
+        'powershell -NoProfile -ExecutionPolicy Bypass -File "%JY_PS%"',
+        'exit /b %ERRORLEVEL%',
+        '',
+      ].join('\r\n')
+
+      const dirCandidates = []
+      const pushDir = (p) => {
+        if (!p || typeof p !== 'string') return
+        try {
+          const resolved = path.resolve(p.trim())
+          if (!resolved || dirCandidates.includes(resolved)) return
+          fs.mkdirSync(resolved, { recursive: true })
+          if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+            dirCandidates.push(resolved)
+          }
+        } catch {
+          /* ignore */
         }
+      }
+      try {
+        pushDir(app.getPath('desktop'))
       } catch {
         /* ignore */
       }
-    }
-    try {
-      pushDir(app.getPath('desktop'))
-    } catch {
-      /* ignore */
-    }
-    try {
-      pushDir(app.getPath('downloads'))
-    } catch {
-      /* ignore */
-    }
-    try {
-      const shellDesk = execSync(
-        'powershell -NoProfile -Command "[Environment]::GetFolderPath(\'Desktop\')"',
-        { encoding: 'utf8', windowsHide: true, timeout: 8000 },
-      )
-        .trim()
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .pop()
-      pushDir(shellDesk)
-    } catch {
-      /* ignore */
-    }
-    pushDir(path.join(os.homedir(), 'Desktop'))
-    pushDir(path.join(os.homedir(), '桌面'))
-    if (process.env.PUBLIC) {
-      pushDir(path.join(process.env.PUBLIC, 'Desktop'))
-      pushDir(path.join(process.env.PUBLIC, '桌面'))
-    }
-    pushDir(installRoot)
-    pushDir(path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'JY_IPAgent'))
-
-    const written = []
-    const writeErrors = []
-    for (const dir of dirCandidates) {
-      const target = path.join(dir, CMD_NAME)
       try {
-        fs.writeFileSync(target, cmdBody, 'utf8')
-        if (fs.existsSync(target) && fs.statSync(target).size > 50) {
-          written.push(target)
-        } else {
-          writeErrors.push(`${target} (写入后不存在或过小)`)
-        }
-      } catch (e) {
-        writeErrors.push(`${target}: ${e instanceof Error ? e.message : String(e)}`)
+        pushDir(app.getPath('downloads'))
+      } catch {
+        /* ignore */
       }
-    }
+      pushDir(path.join(os.homedir(), 'Desktop'))
+      pushDir(path.join(os.homedir(), '桌面'))
+      pushDir(installRoot)
+      pushDir(path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'JY_IPAgent'))
 
-    // Prefer shell Desktop, then downloads, then install root
-    let deskRoots = []
-    try {
-      deskRoots = [path.resolve(app.getPath('desktop'))]
-    } catch {
-      deskRoots = []
-    }
-    const pick =
-      written.find((p) => deskRoots.some((d) => p.startsWith(d + path.sep))) ||
-      written.find((p) => /downloads/i.test(p)) ||
-      written.find((p) => p.startsWith(path.resolve(installRoot) + path.sep)) ||
-      written[0] ||
-      ''
-
-    if (!pick || !fs.existsSync(pick)) {
-      return {
-        ok: false,
-        verified: false,
-        message:
-          '安装脚本未能写入任何可见位置（桌面/下载/安装盘均失败）。\n' +
-          (writeErrors.length ? writeErrors.slice(0, 6).join('\n') : '无详细错误'),
-        cmd_path: '',
-        written_paths: [],
+      const writeErrors = []
+      for (const dir of dirCandidates) {
+        try {
+          fs.writeFileSync(path.join(dir, PS_NAME), psBody, 'utf8')
+          const target = path.join(dir, CMD_NAME)
+          fs.writeFileSync(target, cmdBody, 'utf8')
+          if (fs.existsSync(target) && fs.statSync(target).size > 20) written.push(target)
+          else writeErrors.push(`${target} (写入后不存在或过小)`)
+        } catch (e) {
+          writeErrors.push(`${dir}: ${e instanceof Error ? e.message : String(e)}`)
+        }
+      }
+      let deskRoots = []
+      try {
+        deskRoots = [path.resolve(app.getPath('desktop'))]
+      } catch {
+        deskRoots = []
+      }
+      pick =
+        written.find((p) => deskRoots.some((d) => p.startsWith(d + path.sep))) ||
+        written.find((p) => /downloads/i.test(p)) ||
+        written.find((p) => p.startsWith(path.resolve(installRoot) + path.sep)) ||
+        written[0] ||
+        ''
+      if (!pick || !fs.existsSync(pick)) {
+        return {
+          ok: false,
+          verified: false,
+          message:
+            '安装脚本未能写入任何可见位置（桌面/下载/安装盘均失败）。\n' +
+            (writeErrors.length ? writeErrors.slice(0, 6).join('\n') : '无详细错误'),
+          cmd_path: '',
+          written_paths: [],
+        }
       }
     }
 
@@ -1338,7 +1310,10 @@ function registerSplashIpc() {
         message: `文件名：${CMD_NAME}`,
         detail:
           `完整路径：\n${pick}\n\n` +
+          `安装包约 ${(exeSize / (1024 * 1024)).toFixed(0)} MB → ${installRoot}\n` +
           `同时写入了 ${written.length} 处：\n${written.join('\n')}\n\n` +
+          '注意：这还没装完，只是准备好管理员安装脚本。\n' +
+          '正常安装要几分钟；几秒就失败 = 安装包多半没下完整。\n' +
           '请看是否弹出「用户账户控制」并点「是」。\n' +
           '若没有弹窗：在上面这个文件上右键 →「以管理员身份运行」。',
         buttons: ['知道了'],
@@ -1360,10 +1335,9 @@ function registerSplashIpc() {
               return /\s/.test(s) ? `"${s}"` : s
             })
             .join(' ')
-        : `install -accept-license --installation-dir="${appDir}" --wsl-default-data-root="${wslRoot}" --windows-containers-default-data-root="${winRoot}"`
+        : `install -accept-license --installation-dir="${appDir}" --wsl-default-data-root="${wslRoot}"`
 
-    // Prefer elevating the verified .cmd (has size checks + start /wait).
-    // Fall back to ShellExecute on the installer exe.
+    // Prefer elevating the verified .cmd (launches .ps1 with size checks).
     const vbs = path.join(os.tmpdir(), `jy-elevate-docker-${Date.now()}.vbs`)
     const elevateTarget = pick
     const elevateTargetArgs = ''
@@ -1383,7 +1357,6 @@ function registerSplashIpc() {
         }
       }, 15000)
     } catch {
-      // Fallback: elevate installer directly
       try {
         const vbs2 = path.join(os.tmpdir(), `jy-elevate-docker-exe-${Date.now()}.vbs`)
         fs.writeFileSync(
@@ -1405,11 +1378,13 @@ function registerSplashIpc() {
       uac_started: uacStarted,
       message:
         (uacStarted
-          ? '已请求管理员权限（请看 UAC 弹窗）。\n'
+          ? '已请求管理员权限（请看 UAC 弹窗并点「是」）。\n'
           : '未能自动弹出管理员确认。\n') +
-        `安装脚本已写入并校验存在：\n${pick}\n` +
-        (written.length > 1 ? `\n备份位置：\n${written.filter((p) => p !== pick).join('\n')}\n` : '') +
-        `\n文件名固定为 ${CMD_NAME}（英文，避免找不到）。右键 →「以管理员身份运行」。`,
+        `这还没装完，只是启动了安装脚本：\n${pick}\n` +
+        `目标盘：${installRoot}\n安装包约 ${(exeSize / (1024 * 1024)).toFixed(0)} MB\n` +
+        `正常要几分钟；几秒失败请看 ${logPath}\n` +
+        (written.length > 1 ? `\n备份：\n${written.filter((p) => p !== pick).join('\n')}\n` : '') +
+        `\n也可右键 ${CMD_NAME} →「以管理员身份运行」。`,
       cmd_path: pick,
       written_paths: written,
     }
