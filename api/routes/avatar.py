@@ -321,19 +321,10 @@ def heygem_wizard_install_docker(body: dict | None = None) -> dict:
 
 @router.post("/heygem/wizard/scan-docker-installer")
 def heygem_wizard_scan_docker_installer() -> dict:
-    """Rescan Downloads/Desktop for Docker Desktop Installer.exe."""
-    from workflow.heygem_wizard import find_local_docker_installers
+    """Rescan Downloads/Desktop; copy spaced names to no-space cache for install."""
+    from workflow.heygem_wizard import materialize_scanned_docker_installer
 
-    found = find_local_docker_installers()
-    return {
-        "ok": True,
-        "local_installers": found,
-        "message": (
-            f"找到 {len(found)} 个安装包。"
-            if found
-            else "未找到。请把 Docker Desktop Installer.exe 放到「下载」文件夹后再扫。"
-        ),
-    }
+    return materialize_scanned_docker_installer()
 
 
 @router.post("/heygem/wizard/launch-docker")
@@ -368,7 +359,7 @@ async def heygem_start_stream():
     if not argv:
         raise HTTPException(
             status_code=400,
-            detail="口播引擎未就绪：请到设置 → 特殊引擎安装 →「口播引擎安装向导」完成 Docker 与加速包，或检查 start.ps1",
+            detail="口播引擎未就绪：请确认 Docker 已启动、夸克加速包已 load 镜像，或检查免 Docker 组件的 start.ps1",
         )
 
     async def events():

@@ -8,9 +8,81 @@ function Get-AgentGitExe {
   foreach ($p in @(
       "${env:ProgramFiles}\Git\cmd\git.exe",
       "${env:ProgramFiles(x86)}\Git\cmd\git.exe",
-      "${env:LOCALAPPDATA}\Programs\Git\cmd\git.exe"
+      "${env:LOCALAPPDATA}\Programs\Git\cmd\git.exe",
+      "$(Join-Path $env:LOCALAPPDATA 'JY_IPAgent\mingit\cmd\git.exe')"
     )) {
     if ($p -and (Test-Path -LiteralPath $p)) { return $p }
+  }
+  return $null
+}
+
+function Ensure-AgentMinGit {
+  <#
+    Optional portable MinGit. Needs short online access.
+    Never throws — returns git path or $null; callers must keep ZIP fallback.
+  #>
+  $existing = Get-AgentGitExe
+  if ($existing) { return $existing }
+  $dest = Join-Path $env:LOCALAPPDATA "JY_IPAgent\mingit"
+  $gitExe = Join-Path $dest "cmd\git.exe"
+  if (Test-Path -LiteralPath $gitExe) { return $gitExe }
+
+  Write-Host "==> 未检测到 Git：尝试下载便携 MinGit（约 1 分钟超时；失败则改用 ZIP，不阻塞）"
+  $zip = Join-Path $env:TEMP "JY_MinGit.zip"
+  $urls = @(
+    "https://ghfast.top/https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip",
+    "https://mirror.ghproxy.com/https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip",
+    "https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip"
+  )
+  $ok = $false
+  foreach ($u in $urls) {
+    try {
+      $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+      Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+      if ($curl) {
+        & curl.exe -L --fail --connect-timeout 15 --max-time 60 -o $zip $u
+        if (($LASTEXITCODE -eq 0) -and (Test-Path $zip) -and ((Get-Item $zip).Length -gt 1000000)) {
+          $ok = $true
+          break
+        }
+      } else {
+        Invoke-WebRequest -Uri $u -OutFile $zip -UseBasicParsing -TimeoutSec 60
+        if ((Test-Path $zip) -and ((Get-Item $zip).Length -gt 1000000)) {
+          $ok = $true
+          break
+        }
+      }
+    } catch {
+      Write-Host "    MinGit mirror failed: $($_.Exception.Message)"
+    }
+  }
+  if (-not $ok) {
+    Write-Host "    跳过便携 Git（无网或超时）；后续用 ZIP 拉源码即可"
+    return $null
+  }
+  try {
+    Remove-Item -LiteralPath $dest -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
+    # MinGit zip may unpack into dest\ directly or one subfolder
+    if (-not (Test-Path -LiteralPath $gitExe)) {
+      $inner = Get-ChildItem $dest -Directory | Select-Object -First 1
+      if ($inner -and (Test-Path (Join-Path $inner.FullName "cmd\git.exe"))) {
+        Get-ChildItem $inner.FullName | ForEach-Object {
+          Move-Item $_.FullName -Destination $dest -Force
+        }
+        Remove-Item $inner.FullName -Recurse -Force -ErrorAction SilentlyContinue
+      }
+    }
+  } catch {
+    Write-Host "    MinGit expand failed: $($_.Exception.Message)"
+    return $null
+  } finally {
+    Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
+  }
+  if (Test-Path -LiteralPath $gitExe) {
+    Write-Host "==> 便携 Git 就绪: $gitExe"
+    return $gitExe
   }
   return $null
 }

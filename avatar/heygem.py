@@ -41,13 +41,25 @@ def health_check(cfg: dict, timeout: float = 3.0) -> bool:
 
 def host_mount(cfg: dict) -> Path:
     raw = heygem_cfg(cfg).get("data_mount_host") or ""
-    if not raw:
-        raise RuntimeError(
-            "HeyGem 未配置 data_mount_host。\n"
-            "在 config.yaml → heygem.data_mount_host 填写 Docker 挂载目录"
-            "（如 E:/agent/data/heygem_face2face）。"
-        )
-    return Path(raw).expanduser().resolve()
+    if raw:
+        p = Path(raw).expanduser()
+        if not p.is_absolute():
+            from avatar.heygem_runtime import ROOT
+
+            p = (ROOT / p).resolve()
+        else:
+            p = p.resolve()
+        # Packaged seed often still has E:/agent/... — fall back to runtime mount
+        norm = str(p).replace("\\", "/").lower()
+        if norm.startswith("e:/agent/") and not p.exists():
+            from avatar.heygem_runtime import resolve_heygem_data_mount
+
+            return resolve_heygem_data_mount()
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+    from avatar.heygem_runtime import resolve_heygem_data_mount
+
+    return resolve_heygem_data_mount()
 
 
 def container_prefix(cfg: dict) -> str:

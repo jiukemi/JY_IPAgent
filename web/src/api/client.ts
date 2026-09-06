@@ -1224,6 +1224,9 @@ export const api = {
       ok: boolean
       message: string
       local_installers: Array<{ path: string; name: string; label: string; size_gb?: number }>
+      preferred_installer?: string
+      source_installer?: string
+      copied?: boolean
     }>('/api/avatar/heygem/wizard/scan-docker-installer', { method: 'POST' }),
 
   heygemWizardLaunchDocker: () =>

@@ -5,7 +5,8 @@ contextBridge.exposeInMainWorld('agentDesktop', {
   edition: () => (process.env.AGENT_EDITION === 'light' ? 'light' : 'full'),
   runtimeInfo: () => ipcRenderer.invoke('desktop:runtime-info'),
   clearRuntimeAndRelaunch: () => ipcRenderer.invoke('desktop:clear-and-relaunch'),
-  exportDiagnostics: () => ipcRenderer.invoke('desktop:export-diag'),
+  exportDiagnostics: (opts) => ipcRenderer.invoke('desktop:export-diag', opts || {}),
+  feedbackPack: () => ipcRenderer.invoke('desktop:feedback-pack'),
   listDrives: () => ipcRenderer.invoke('desktop:list-drives'),
   setRuntimeDrive: (driveLetter) => ipcRenderer.invoke('desktop:set-runtime-drive', driveLetter),
   setRuntimeDriveAndRelaunch: (driveLetter) =>

@@ -53,6 +53,7 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
   } | null>(null)
   const [loading, setLoading] = useState(false)
   const [open, setOpen] = useState(defaultOpen)
+  const probedOnce = useRef(false)
   const [alert, setAlert] = useState<{
     title: string
     message: string
@@ -78,11 +79,18 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
     }
   }, [])
 
-  // Only probe when panel is expanded (or deep-linked open) — avoids blocking Settings open.
+  // Probe once when first expanded — avoid re-detect every expand / settings reopen
   useEffect(() => {
     if (!open) return
+    if (probedOnce.current) return
+    probedOnce.current = true
     void load()
   }, [open, load])
+
+  const redetect = () => {
+    probedOnce.current = true
+    void load()
+  }
 
   // Auto-refresh once per finished install job id (Strict Mode remount-safe)
   const seenInstallJobs = useRef<Set<string>>(new Set())
@@ -150,6 +158,11 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
       jobQueue.setCenterOpen(true)
       return
     }
+    setAlert({
+      title: '正在加入任务中心…',
+      message: `「${st?.label || engine}」提交中。电脑较慢或网络差时可能要几秒，请稍候；加入后请在任务中心查看下载进度，不要重复点击。`,
+      variant: 'info',
+    })
     try {
       const outcome = await jobQueue.enqueue({
         type: 'engine_install',
@@ -163,6 +176,12 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
           title: '已加入或重复',
           message: `${outcome.message}\n\n请到任务中心查看记录。`,
           variant: 'info',
+        })
+      } else {
+        setAlert({
+          title: '已加入任务中心',
+          message: `「${st?.label || engine}」已排队安装。下载/编译可能要很久，请打开任务中心看进度与日志，不要以为没反应。`,
+          variant: 'success',
         })
       }
     } catch (e) {
@@ -208,27 +227,40 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
   return (
     <>
       <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)]">
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          className="flex w-full items-center justify-between px-3 py-2.5 text-left text-xs"
-        >
-          <span>
-            <span className="font-medium text-[var(--text)]">本机配置与模型安装</span>
-            {hardware?.summary && (
-              <span className="ml-2 text-[var(--muted)]">
-                {hardware.summary}
-                {hardware.source === 'rust' && ' · Rust 探测'}
-              </span>
-            )}
-          </span>
-          <span className="text-[var(--muted)]">{open ? '收起 ▲' : '展开 ▼'}</span>
-        </button>
+        <div className="flex w-full items-center gap-2 px-3 py-2.5 text-xs">
+          <button
+            type="button"
+            onClick={() => setOpen((o) => !o)}
+            className="flex min-w-0 flex-1 items-center justify-between text-left"
+          >
+            <span className="min-w-0">
+              <span className="font-medium text-[var(--text)]">本机配置与模型安装</span>
+              {hardware?.summary && (
+                <span className="ml-2 text-[var(--muted)]">
+                  {hardware.summary}
+                  {hardware.source === 'rust' && ' · Rust 探测'}
+                </span>
+              )}
+            </span>
+            <span className="shrink-0 text-[var(--muted)]">{open ? '收起 ▲' : '展开 ▼'}</span>
+          </button>
+          {open && (
+            <button
+              type="button"
+              disabled={loading}
+              onClick={() => void redetect()}
+              className="shrink-0 rounded-lg border border-[var(--border)] px-2 py-1 text-[10px] text-[var(--accent)] hover:bg-[var(--panel)] disabled:opacity-50"
+              title="重新检测本机硬件与引擎状态"
+            >
+              {loading ? '检测中…' : '重新检测'}
+            </button>
+          )}
+        </div>
 
         {open && (
           <div className="space-y-2 border-t border-[var(--border)] p-3">
             <p className="text-[10px] text-[var(--muted)]">
-              根据本机硬件（优先 Rust 探测）推荐转写 / 配音 / 口播引擎；点击安装会加入任务中心。
+              首次展开时检测一次；之后点「重新检测」刷新。点击安装会立即加入任务中心（下载可能较久）。
             </p>
             {recommend?.summary && (
               <div className="rounded-lg border border-violet-400/40 bg-violet-50 px-3 py-2 text-[11px] text-violet-950 dark:border-violet-500/30 dark:bg-violet-950/30 dark:text-violet-100">

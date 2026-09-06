@@ -143,6 +143,11 @@ export function JobQueueProvider({
       if (!targetPath) {
         return { ok: false, duplicate: true, message: '请先选择会话（或等待系统任务目录就绪）' }
       }
+      // Immediate feedback — jobsEnqueue / refresh can take seconds on slow PCs
+      if (input.type === 'engine_install') {
+        setToast({ message: '正在加入任务中心（请稍候）…', variant: 'info' })
+        setCenterOpen(true)
+      }
       const res = await api.jobsEnqueue({
         session_path: targetPath,
         type: input.type,
@@ -156,11 +161,14 @@ export function JobQueueProvider({
       })
       if (res.ok && res.job) {
         setToast({
-          message: input.type === 'engine_install' ? '引擎安装已加入任务中心' : '已加入任务中心',
+          message:
+            input.type === 'engine_install'
+              ? '引擎安装已加入任务中心（下载可能较久，请看进度/日志）'
+              : '已加入任务中心',
           variant: 'success',
         })
         setCenterOpen(true)
-        await refresh()
+        void refresh()
         return { ok: true, job: res.job, message: '已加入任务中心' }
       }
       const msg =
@@ -170,7 +178,7 @@ export function JobQueueProvider({
           : '当前条件下已有任务')
       setToast({ message: msg, variant: 'warning' })
       setCenterOpen(true)
-      await refresh()
+      void refresh()
       return {
         ok: false,
         duplicate: true,

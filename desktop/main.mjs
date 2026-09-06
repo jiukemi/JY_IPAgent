@@ -634,8 +634,11 @@ function collectDiagMeta() {
   }
 }
 
-/** Build a zip users can send for support. */
-async function exportDiagnosticsZip() {
+/** Build a zip users can send for support.
+ * @param {{ autoSave?: boolean }} [opts] autoSave=true → Downloads, no save dialog (一键反馈)
+ */
+async function exportDiagnosticsZip(opts = {}) {
+  const autoSave = Boolean(opts?.autoSave)
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   const tmpRoot = path.join(os.tmpdir(), `jy-diag-${process.pid}-${Date.now()}`)
   const folder = path.join(tmpRoot, `JY_IPAgent-diag-${stamp}`)
@@ -708,20 +711,23 @@ async function exportDiagnosticsZip() {
   )
 
   const defaultName = `JY_IPAgent-diag-${stamp}.zip`
-  const save = await dialog.showSaveDialog({
-    title: '导出诊断包',
-    defaultPath: path.join(app.getPath('downloads'), defaultName),
-    filters: [{ name: 'Zip', extensions: ['zip'] }],
-  })
-  if (save.canceled || !save.filePath) {
-    try {
-      fs.rmSync(tmpRoot, { recursive: true, force: true })
-    } catch {
-      /* ignore */
+  let zipPath = path.join(app.getPath('downloads'), defaultName)
+  if (!autoSave) {
+    const save = await dialog.showSaveDialog({
+      title: '导出诊断包',
+      defaultPath: zipPath,
+      filters: [{ name: 'Zip', extensions: ['zip'] }],
+    })
+    if (save.canceled || !save.filePath) {
+      try {
+        fs.rmSync(tmpRoot, { recursive: true, force: true })
+      } catch {
+        /* ignore */
+      }
+      return { ok: false, cancelled: true, message: '已取消' }
     }
-    return { ok: false, cancelled: true, message: '已取消' }
+    zipPath = save.filePath.endsWith('.zip') ? save.filePath : `${save.filePath}.zip`
   }
-  const zipPath = save.filePath.endsWith('.zip') ? save.filePath : `${save.filePath}.zip`
   try {
     if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath)
   } catch {
@@ -756,7 +762,7 @@ async function exportDiagnosticsZip() {
   } catch {
     /* ignore */
   }
-  return { ok: true, path: zipPath, message: `已导出：${zipPath}` }
+  return { ok: true, path: zipPath, message: `已导出：${zipPath}`, appVersion: meta.appVersion }
 }
 
 function setRuntimeDrive(driveLetter) {
@@ -963,7 +969,7 @@ function registerSplashIpc() {
     setTimeout(() => relaunchApp(), 400)
     return { ...result, relaunching: true }
   })
-  ipcMain.handle('boot:export-diag', () => exportDiagnosticsZip())
+  ipcMain.handle('boot:export-diag', (_e, opts) => exportDiagnosticsZip(opts || {}))
   // Main window (settings) uses the same handlers under desktop:* aliases
   ipcMain.handle('desktop:runtime-info', (_e, opts) =>
     inspectRuntime({ withSize: opts?.withSize !== false }),
@@ -974,7 +980,35 @@ function registerSplashIpc() {
     setTimeout(() => relaunchApp(), 400)
     return { ...result, relaunching: true }
   })
-  ipcMain.handle('desktop:export-diag', () => exportDiagnosticsZip())
+  ipcMain.handle('desktop:export-diag', (_e, opts) => exportDiagnosticsZip(opts || {}))
+  ipcMain.handle('desktop:feedback-pack', async () => {
+    const res = await exportDiagnosticsZip({ autoSave: true })
+    if (!res?.ok || !res.path) return res
+    const ver = res.appVersion || app.getVersion()
+    const subject = encodeURIComponent(`[九易AI反馈] ${ver}`)
+    const body = encodeURIComponent(
+      [
+        '请简要描述问题（卡在哪一步、报错原文）：',
+        '',
+        '',
+        '—— 以下请保留 ——',
+        `版本: ${ver}`,
+        `诊断包路径: ${res.path}`,
+        '（请把资源管理器里选中的 zip 作为附件发给群主 / 发到反馈邮箱）',
+      ].join('\n'),
+    )
+    try {
+      await shell.openExternal(`mailto:jiukemi001_fd@2925.com?subject=${subject}&body=${body}`)
+    } catch {
+      /* ignore — zip already saved */
+    }
+    return {
+      ...res,
+      message:
+        `诊断包已保存到下载文件夹，并已尝试打开邮件。\n` +
+        `请把 zip 发给群主，或附件发到 jiukemi001_fd@2925.com\n${res.path}`,
+    }
+  })
   ipcMain.handle('desktop:list-drives', () => ({
     drives: listFixedDrives(),
     current: inspectRuntime({ withSize: false }),
@@ -1071,24 +1105,77 @@ function registerSplashIpc() {
     const installer = typeof payload?.installer === 'string' ? payload.installer.trim() : ''
     const installRoot = typeof payload?.install_root === 'string' ? payload.install_root.trim() : ''
     const args = Array.isArray(payload?.args) ? payload.args.map(String) : []
+    // Real Docker Desktop Installer is typically 400–600MB. A former 50MB gate
+    // accepted truncated caches (~51MB) that then fail as admin with exit code 3.
+    const MIN_INSTALLER_BYTES = 200_000_000
 
-    const exe = installer && fs.existsSync(installer) ? path.resolve(installer) : ''
+    let exe = installer && fs.existsSync(installer) ? path.resolve(installer) : ''
     if (!exe) {
       return { ok: false, message: '安装包文件不存在，请重新扫描/选择 Docker Desktop 安装包。', verified: false }
+    }
+    let exeSize = 0
+    try {
+      exeSize = fs.statSync(exe).size
+    } catch {
+      exeSize = 0
+    }
+    if (exeSize < MIN_INSTALLER_BYTES) {
+      // Drop truncated LOCALAPPDATA cache so the next scan cannot reuse it.
+      try {
+        const cache = path.join(process.env.LOCALAPPDATA || '', 'JY_IPAgent', 'DockerDesktopInstaller.exe')
+        if (cache && fs.existsSync(cache) && fs.statSync(cache).size < MIN_INSTALLER_BYTES) {
+          fs.unlinkSync(cache)
+        }
+      } catch {
+        /* ignore */
+      }
+      return {
+        ok: false,
+        verified: false,
+        message:
+          `安装包不完整（仅 ${(exeSize / (1024 * 1024)).toFixed(0)} MB）。\n` +
+          '完整「Docker Desktop Installer.exe」通常约 500MB+。\n' +
+          '请用浏览器/夸克重新下载后，在向导里「扫描本机安装包」再安装。\n' +
+          `当前文件：${exe}`,
+      }
     }
     if (!installRoot) {
       return { ok: false, message: '未指定安装目标磁盘。', verified: false }
     }
 
+    // Prefer no-space cache path under LOCALAPPDATA for the elevated .cmd
+    const cacheExe = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'JY_IPAgent', 'DockerDesktopInstaller.exe')
+    try {
+      fs.mkdirSync(path.dirname(cacheExe), { recursive: true })
+      const needCopy =
+        exe.toLowerCase() !== cacheExe.toLowerCase() &&
+        (/\s/.test(exe) || path.basename(exe) !== 'DockerDesktopInstaller.exe' || !fs.existsSync(cacheExe))
+      if (needCopy) {
+        let same = false
+        try {
+          same = fs.existsSync(cacheExe) && fs.statSync(cacheExe).size === exeSize
+        } catch {
+          same = false
+        }
+        if (!same) fs.copyFileSync(exe, cacheExe)
+      }
+      if (fs.existsSync(cacheExe) && fs.statSync(cacheExe).size >= MIN_INSTALLER_BYTES) {
+        exe = cacheExe
+        exeSize = fs.statSync(cacheExe).size
+      }
+    } catch {
+      /* keep original exe */
+    }
+
     const appDir = path.join(installRoot, 'DockerDesktop')
     const wslRoot = path.join(installRoot, 'wsl')
     const winRoot = path.join(installRoot, 'windows-containers')
-    for (const d of [appDir, wslRoot, winRoot]) {
-      try {
-        fs.mkdirSync(d, { recursive: true })
-      } catch {
-        /* ignore */
-      }
+    // Only create the parent install root as the current user. Pre-creating
+    // DockerDesktop/wsl without elevation can leave ACLs that break install.
+    try {
+      fs.mkdirSync(installRoot, { recursive: true })
+    } catch {
+      /* ignore */
     }
 
     // ASCII-only filename — Chinese names + redirected Desktop caused "提示有文件、桌面没有" complaints.
@@ -1096,18 +1183,45 @@ function registerSplashIpc() {
     const cmdBody = [
       '@echo off',
       'chcp 65001 >nul',
-      'setlocal',
+      'setlocal EnableExtensions',
       'title JY_IPAgent - Install Docker Desktop',
+      `set "JY_DOCKER_EXE=${exe}"`,
+      `set "JY_DOCKER_APP=${appDir}"`,
+      `set "JY_DOCKER_WSL=${wslRoot}"`,
+      `set "JY_DOCKER_WIN=${winRoot}"`,
       'echo ========================================',
       'echo  JY_IPAgent: install Docker to selected drive',
       `echo  Target: ${installRoot}`,
+      'echo  Installer: %JY_DOCKER_EXE%',
       'echo ========================================',
       'echo.',
-      `"${exe}" install --accept-license --installation-dir=${appDir} --wsl-default-data-root=${wslRoot} --windows-containers-default-data-root=${winRoot}`,
+      'if not exist "%JY_DOCKER_EXE%" (',
+      '  echo [FAILED] installer exe not found',
+      '  echo path: %JY_DOCKER_EXE%',
+      '  echo Please re-download Docker Desktop Installer.exe ~500MB+',
+      '  pause',
+      '  exit /b 3',
+      ')',
+      'for %%A in ("%JY_DOCKER_EXE%") do set "JY_DOCKER_SIZE=%%~zA"',
+      'echo Installer size bytes: %JY_DOCKER_SIZE%',
+      'if %JY_DOCKER_SIZE% LSS 200000000 (',
+      '  echo [FAILED] installer too small / truncated ^(%JY_DOCKER_SIZE% bytes^)',
+      '  echo Full package is usually ~500MB+. Re-download and scan again.',
+      '  pause',
+      '  exit /b 3',
+      ')',
+      'if not exist "%JY_DOCKER_APP%" mkdir "%JY_DOCKER_APP%"',
+      'if not exist "%JY_DOCKER_WSL%" mkdir "%JY_DOCKER_WSL%"',
+      'if not exist "%JY_DOCKER_WIN%" mkdir "%JY_DOCKER_WIN%"',
+      'echo.',
+      'echo Starting Docker Desktop installer ^(admin^)...',
+      'start /wait "" "%JY_DOCKER_EXE%" install -accept-license --installation-dir="%JY_DOCKER_APP%" --wsl-default-data-root="%JY_DOCKER_WSL%" --windows-containers-default-data-root="%JY_DOCKER_WIN%"',
       'set ERR=%ERRORLEVEL%',
       'echo.',
       'if not %ERR%==0 (',
       '  echo [FAILED] exit code %ERR%',
+      '  echo Tip: delete leftover folders under the target drive and retry;',
+      '  echo also try deleting C:\\ProgramData\\DockerDesktop if a prior failed install left it.',
       '  pause',
       '  exit /b %ERR%',
       ')',
@@ -1236,13 +1350,26 @@ function registerSplashIpc() {
 
     const elevateArgs =
       args.length >= 1
-        ? args.join(' ')
-        : `install --accept-license --installation-dir=${appDir} --wsl-default-data-root=${wslRoot} --windows-containers-default-data-root=${winRoot}`
+        ? args
+            .map((a) => {
+              const s = String(a)
+              if (s.startsWith('--') && s.includes('=') && !s.includes('"')) {
+                const i = s.indexOf('=')
+                return `${s.slice(0, i + 1)}"${s.slice(i + 1)}"`
+              }
+              return /\s/.test(s) ? `"${s}"` : s
+            })
+            .join(' ')
+        : `install -accept-license --installation-dir="${appDir}" --wsl-default-data-root="${wslRoot}" --windows-containers-default-data-root="${winRoot}"`
 
+    // Prefer elevating the verified .cmd (has size checks + start /wait).
+    // Fall back to ShellExecute on the installer exe.
     const vbs = path.join(os.tmpdir(), `jy-elevate-docker-${Date.now()}.vbs`)
+    const elevateTarget = pick
+    const elevateTargetArgs = ''
     const vbsBody =
       'Set sh = CreateObject("Shell.Application")\r\n' +
-      `sh.ShellExecute ${JSON.stringify(exe)}, ${JSON.stringify(elevateArgs)}, "", "runas", 1\r\n`
+      `sh.ShellExecute ${JSON.stringify(elevateTarget)}, ${JSON.stringify(elevateTargetArgs)}, "", "runas", 1\r\n`
     let uacStarted = false
     try {
       fs.writeFileSync(vbs, vbsBody, 'utf8')
@@ -1256,7 +1383,20 @@ function registerSplashIpc() {
         }
       }, 15000)
     } catch {
-      uacStarted = false
+      // Fallback: elevate installer directly
+      try {
+        const vbs2 = path.join(os.tmpdir(), `jy-elevate-docker-exe-${Date.now()}.vbs`)
+        fs.writeFileSync(
+          vbs2,
+          'Set sh = CreateObject("Shell.Application")\r\n' +
+            `sh.ShellExecute ${JSON.stringify(exe)}, ${JSON.stringify(elevateArgs)}, "", "runas", 1\r\n`,
+          'utf8',
+        )
+        spawn('wscript.exe', [vbs2], { windowsHide: true, detached: true, stdio: 'ignore' }).unref()
+        uacStarted = true
+      } catch {
+        uacStarted = false
+      }
     }
 
     return {

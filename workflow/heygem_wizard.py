@@ -94,16 +94,41 @@ def list_install_drives() -> list[dict[str, Any]]:
     return out
 
 
+# Official installer is typically ~400–600MB. Old 50MB gate accepted truncated
+# downloads (e.g. exactly 51_000_000), which then fail as admin with exit code 3
+# ("The system cannot find the path specified").
+_DOCKER_INSTALLER_MIN_BYTES = 200_000_000
+
+
 def _installer_cache_path() -> Path:
     base = Path(os.environ.get("LOCALAPPDATA") or os.environ.get("TEMP") or ".")
     return base / "JY_IPAgent" / "DockerDesktopInstaller.exe"
 
 
+def _installer_size_hint(n: int) -> str:
+    return f"{n / (1024**2):.0f} MB"
+
+
 def _installer_looks_valid(path: Path) -> bool:
     try:
-        return path.is_file() and path.stat().st_size >= 50_000_000
+        return path.is_file() and path.stat().st_size >= _DOCKER_INSTALLER_MIN_BYTES
     except OSError:
         return False
+
+
+def _purge_truncated_installer(path: Path) -> None:
+    """Remove cache/partial files that are too small to be a real installer."""
+    try:
+        if path.is_file() and path.stat().st_size < _DOCKER_INSTALLER_MIN_BYTES:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    partial = path.with_suffix(".partial")
+    try:
+        if partial.is_file() and partial.stat().st_size < _DOCKER_INSTALLER_MIN_BYTES:
+            partial.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def _normalize_installer_path(installer: Path) -> Path:
@@ -111,11 +136,24 @@ def _normalize_installer_path(installer: Path) -> Path:
 
     Official name is ``Docker Desktop Installer.exe``; Downloads folders may also
     contain spaces (e.g. ``C:\\Users\\Foo Bar\\Downloads\\...``).
+
+    We **copy** (do not rename the user's download) so the original official
+    filename stays in 下载/Downloads for the user to find again.
     """
     src = installer.expanduser().resolve()
-    if not _installer_looks_valid(src):
-        raise RuntimeError(f"安装包无效或不完整：{src}")
     dest = _installer_cache_path()
+    _purge_truncated_installer(dest)
+    if not _installer_looks_valid(src):
+        size = 0
+        try:
+            size = src.stat().st_size if src.is_file() else 0
+        except OSError:
+            pass
+        raise RuntimeError(
+            f"安装包无效或不完整：{src}（{_installer_size_hint(size)}，"
+            f"完整包通常约 500MB+，至少需 {_installer_size_hint(_DOCKER_INSTALLER_MIN_BYTES)}）。"
+            "请用浏览器/夸克重新下载「Docker Desktop Installer.exe」后再扫描。"
+        )
     dest.parent.mkdir(parents=True, exist_ok=True)
     # Already the cache file and name has no spaces
     try:
@@ -123,7 +161,13 @@ def _normalize_installer_path(installer: Path) -> Path:
             return dest
     except OSError:
         pass
-    need_copy = (" " in str(src)) or (src.name != dest.name) or (not dest.is_file())
+    need_copy = (
+        (" " in str(src))
+        or (" " in src.name)
+        or (src.name != dest.name)
+        or (not dest.is_file())
+        or (dest.is_file() and dest.stat().st_size != src.stat().st_size)
+    )
     if need_copy:
         # Skip copy if same size already cached (resume-friendly)
         try:
@@ -132,12 +176,96 @@ def _normalize_installer_path(installer: Path) -> Path:
         except OSError:
             pass
         _set_docker_install(
-            message=f"安装包文件名含空格或路径含空格，正在复制到无空格路径：{dest.name}…",
+            message=f"安装包路径/文件名含空格，正在复制为无空格文件：{dest}…",
         )
         shutil.copy2(src, dest)
     if not _installer_looks_valid(dest):
         raise RuntimeError(f"复制安装包失败：{dest}")
     return dest
+
+
+def materialize_scanned_docker_installer(
+    preferred_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """After scan: validate size and copy to no-space cache; ready for install-to-drive.
+
+    Does not rename the file in 下载 — copies to %LOCALAPPDATA%\\JY_IPAgent\\DockerDesktopInstaller.exe.
+    """
+    found = find_local_docker_installers()
+    src: Path | None = None
+    if preferred_path:
+        cand = Path(str(preferred_path).strip().strip('"'))
+        if _installer_looks_valid(cand):
+            src = cand
+    if src is None and found:
+        src = Path(found[0]["path"])
+    if src is None and _installer_looks_valid(_installer_cache_path()):
+        src = _installer_cache_path()
+    if src is None:
+        return {
+            "ok": False,
+            "local_installers": found,
+            "preferred_installer": "",
+            "source_installer": "",
+            "copied": False,
+            "message": (
+                "未找到可用安装包。请把完整的 Docker Desktop Installer.exe"
+                f"（约 500MB+，至少 {_installer_size_hint(_DOCKER_INSTALLER_MIN_BYTES)}）"
+                "放到「下载」文件夹后再扫。"
+            ),
+        }
+    try:
+        normalized = _normalize_installer_path(src)
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "local_installers": found,
+            "preferred_installer": "",
+            "source_installer": str(src),
+            "copied": False,
+            "message": str(exc),
+        }
+    copied = False
+    try:
+        copied = src.resolve() != normalized.resolve()
+    except OSError:
+        copied = str(src) != str(normalized)
+    size = normalized.stat().st_size
+    # Prefer showing the no-space path first in the list
+    preferred_entry = {
+        "path": str(normalized),
+        "name": normalized.name,
+        "bytes": size,
+        "size_gb": round(size / (1024**3), 2),
+        "label": (
+            f"{normalized.name}（{round(size / (1024**3), 2)} GB · 已去空格，可直接安装）"
+        ),
+    }
+    merged = [preferred_entry]
+    seen = {str(normalized).lower()}
+    for item in found:
+        key = str(item.get("path") or "").lower()
+        if key and key not in seen:
+            seen.add(key)
+            merged.append(item)
+    msg_bits = [
+        f"已找到安装包（{_installer_size_hint(size)}）。",
+    ]
+    if copied or (" " in str(src)) or (" " in src.name):
+        msg_bits.append(
+            f"原文件名含空格，已复制为无空格路径（不改动下载目录原文件）：\n{normalized}"
+        )
+    else:
+        msg_bits.append(f"安装包路径：\n{normalized}")
+    msg_bits.append("可直接点「安装到所选盘」。")
+    return {
+        "ok": True,
+        "local_installers": merged,
+        "preferred_installer": str(normalized),
+        "source_installer": str(src),
+        "copied": copied or (" " in str(src)) or (" " in src.name),
+        "message": "\n".join(msg_bits),
+    }
 
 
 def find_local_docker_installers() -> list[dict[str, Any]]:
@@ -252,8 +380,11 @@ def _download_docker_installer(dest: Path) -> None:
                 raise OSError(
                     f"retrieval incomplete: got only {written} out of {expected} bytes"
                 )
-            if written < 50_000_000:
-                raise OSError(f"下载文件过小（{written} bytes），疑似被中断或拦截")
+            if written < _DOCKER_INSTALLER_MIN_BYTES:
+                raise OSError(
+                    f"下载文件过小（{_installer_size_hint(written)}），"
+                    f"完整包通常约 500MB+，疑似被中断或拦截"
+                )
             tmp.replace(dest)
             return
         except Exception as exc:  # noqa: BLE001
@@ -276,31 +407,61 @@ def _download_docker_installer(dest: Path) -> None:
 def _write_docker_install_cmd(installer: Path, install_root: Path) -> Path:
     """Write install .cmd to Desktop / Downloads / install_root (ASCII name, verified)."""
     installer = _normalize_installer_path(installer)
+    # Only ensure parent root exists; do NOT pre-create DockerDesktop/wsl as the
+    # non-elevated user — leftover ACLs break the elevated installer.
+    install_root.mkdir(parents=True, exist_ok=True)
     app_dir = install_root / "DockerDesktop"
     wsl_root = install_root / "wsl"
     win_root = install_root / "windows-containers"
-    for p in (app_dir, wsl_root, win_root):
-        p.mkdir(parents=True, exist_ok=True)
 
     exe = str(installer)
     app_s, wsl_s, win_s = str(app_dir), str(wsl_root), str(win_root)
     # ASCII filename only — Chinese names vanished for many users (redirected Desktop / encoding).
     cmd_name = "JY-Install-Docker.cmd"
+    # Official / community recipe: start /wait "" "Installer.exe" install ...
+    # Quote every path; create target dirs only after elevation.
     lines = [
         "@echo off",
         "chcp 65001 >nul",
-        "setlocal",
+        "setlocal EnableExtensions",
         "title JY_IPAgent - Install Docker Desktop",
+        f'set "JY_DOCKER_EXE={exe}"',
+        f'set "JY_DOCKER_APP={app_s}"',
+        f'set "JY_DOCKER_WSL={wsl_s}"',
+        f'set "JY_DOCKER_WIN={win_s}"',
         "echo ========================================",
         "echo  JY_IPAgent: install Docker to selected drive",
         "echo  Target: " + str(install_root),
+        "echo  Installer: %JY_DOCKER_EXE%",
         "echo ========================================",
         "echo.",
-        f'"{exe}" install --accept-license --installation-dir={app_s} --wsl-default-data-root={wsl_s} --windows-containers-default-data-root={win_s}',
+        'if not exist "%JY_DOCKER_EXE%" (',
+        "  echo [FAILED] installer exe not found",
+        "  echo path: %JY_DOCKER_EXE%",
+        "  echo Please re-download Docker Desktop Installer.exe ~500MB+",
+        "  pause",
+        "  exit /b 3",
+        ")",
+        'for %%A in ("%JY_DOCKER_EXE%") do set "JY_DOCKER_SIZE=%%~zA"',
+        "echo Installer size bytes: %JY_DOCKER_SIZE%",
+        'if %JY_DOCKER_SIZE% LSS 200000000 (',
+        "  echo [FAILED] installer too small / truncated ^(%JY_DOCKER_SIZE% bytes^)",
+        "  echo Full package is usually ~500MB+. Re-download and scan again.",
+        "  pause",
+        "  exit /b 3",
+        ")",
+        'if not exist "%JY_DOCKER_APP%" mkdir "%JY_DOCKER_APP%"',
+        'if not exist "%JY_DOCKER_WSL%" mkdir "%JY_DOCKER_WSL%"',
+        'if not exist "%JY_DOCKER_WIN%" mkdir "%JY_DOCKER_WIN%"',
+        "echo.",
+        "echo Starting Docker Desktop installer ^(admin^)...",
+        'start /wait "" "%JY_DOCKER_EXE%" install -accept-license --installation-dir="%JY_DOCKER_APP%" --wsl-default-data-root="%JY_DOCKER_WSL%" --windows-containers-default-data-root="%JY_DOCKER_WIN%"',
         "set ERR=%ERRORLEVEL%",
         "echo.",
         "if not %ERR%==0 (",
         "  echo [FAILED] exit code %ERR%",
+        "  echo Tip: delete leftover folders under the target drive and retry;",
+        "  echo also try deleting C:\\ProgramData\\DockerDesktop if a prior failed install left it.",
         "  pause",
         "  exit /b %ERR%",
         ")",
@@ -486,7 +647,7 @@ def prepare_docker_desktop_install(
         "desktop_hint": "JY-Install-Docker.cmd（桌面 / 下载 / 安装盘）",
         "args": [
             "install",
-            "--accept-license",
+            "-accept-license",
             f"--installation-dir={install_root / 'DockerDesktop'}",
             f"--wsl-default-data-root={install_root / 'wsl'}",
             f"--windows-containers-default-data-root={install_root / 'windows-containers'}",
@@ -542,10 +703,15 @@ def _install_docker_worker(
         if installer_path:
             cand = Path(installer_path.strip().strip('"'))
             if not _installer_looks_valid(cand):
+                sz = 0
+                try:
+                    sz = cand.stat().st_size if cand.is_file() else 0
+                except OSError:
+                    pass
                 _set_docker_install(
                     phase="error",
                     message=(
-                        f"安装包无效或不完整：{cand}。"
+                        f"安装包无效或不完整：{cand}（{_installer_size_hint(sz)}）。"
                         "请确认是「Docker Desktop Installer.exe」（通常约 500MB+）。"
                     ),
                     progress_pct=0,
@@ -992,6 +1158,8 @@ def wizard_status() -> dict[str, Any]:
             "api": st.get("api"),
             "gpu_ok": st.get("gpu_ok"),
             "gpu_hint": st.get("gpu_hint"),
+            "can_start": st.get("can_start"),
+            "image_loaded": bool(st.get("image_loaded") or image_ok),
         },
         "recommended_pack": recommended,
         "share_root_url": catalog.get("share_root_url") or "",

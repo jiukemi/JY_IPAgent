@@ -1,7 +1,8 @@
-"""HeyGem / Duix local runtime helpers (component-first; Docker optional legacy)."""
+"""HeyGem / Duix local runtime helpers (component-first; Docker + quark for mini)."""
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -46,6 +47,153 @@ def component_present() -> bool:
     return is_installed(COMPONENT_ID)
 
 
+def _docker_image_present(image: str) -> bool:
+    if not docker_cli_present():
+        return False
+    try:
+        r = subprocess.run(
+            ["docker", "image", "inspect", image],
+            capture_output=True,
+            timeout=30,
+            check=False,
+        )
+        return r.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def resolve_heygem_docker_image() -> str | None:
+    """Pick a loaded guiji2025/duix.avatar* image (prefer GPU family match)."""
+    from workflow.gpu_family import classify_gpu_family, heygem_docker_image
+
+    machine = classify_gpu_family()
+    fam = str(machine.get("gpu_family") or "general")
+    prefer = heygem_docker_image(fam)
+    if _docker_image_present(prefer):
+        return prefer
+    for alt_fam in ("general", "rtx50"):
+        img = heygem_docker_image(alt_fam)
+        if img != prefer and _docker_image_present(img):
+            return img
+    try:
+        r = subprocess.run(
+            [
+                "docker",
+                "images",
+                "--format",
+                "{{.Repository}}:{{.Tag}}",
+                "guiji2025/duix.avatar",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        if r.returncode == 0:
+            for line in (r.stdout or "").splitlines():
+                name = line.strip()
+                if name and not name.endswith(":<none>"):
+                    if "5090" in name:
+                        return "guiji2025/duix.avatar-5090"
+                    return "guiji2025/duix.avatar"
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return None
+
+
+def heygem_docker_image_ready() -> bool:
+    return resolve_heygem_docker_image() is not None
+
+
+def _runtime_root() -> Path:
+    rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
+    if rt:
+        return Path(rt).expanduser().resolve()
+    return (ROOT / "data" / "runtime").resolve()
+
+
+def app_packaged_hint() -> bool:
+    return strict_user() or bool((os.environ.get("AGENT_RUNTIME_DIR") or "").strip())
+
+
+def resolve_heygem_data_mount() -> Path:
+    """Writable host mount for /code/data — prefer config, else runtime dir."""
+    mount: Path | None = None
+    try:
+        from workflow.app_config import load_cfg
+
+        raw = ((load_cfg().get("heygem") or {}).get("data_mount_host") or "").strip()
+        if raw:
+            p = Path(raw).expanduser()
+            if not p.is_absolute():
+                p = (ROOT / p).resolve()
+            else:
+                p = p.resolve()
+            # Seeded example E:/agent/... is useless on other PCs
+            norm = str(p).replace("\\", "/").lower()
+            if norm.startswith("e:/agent/") and app_packaged_hint() and not p.exists():
+                mount = None
+            else:
+                mount = p
+    except Exception:
+        mount = None
+    if mount is None:
+        mount = _runtime_root() / "heygem_face2face"
+    mount.mkdir(parents=True, exist_ok=True)
+    return mount
+
+
+def _mount_for_compose(mount: Path) -> str:
+    """Windows host path → compose volume left-hand side (e.g. d:/foo/bar)."""
+    s = str(mount.resolve())
+    if len(s) >= 2 and s[1] == ":":
+        drive = s[0].lower()
+        rest = s[2:].replace("\\", "/").lstrip("/")
+        return f"{drive}:/{rest}"
+    return s.replace("\\", "/")
+
+
+def ensure_heygem_docker_compose(image: str | None = None) -> Path | None:
+    """Write a minimal lite compose under runtime (no Duix-Avatar git clone needed)."""
+    img = image or resolve_heygem_docker_image()
+    if not img:
+        return None
+    mount = resolve_heygem_data_mount()
+    deploy = _runtime_root() / "heygem" / "deploy"
+    deploy.mkdir(parents=True, exist_ok=True)
+    compose = deploy / "docker-compose.yml"
+    mount_docker = _mount_for_compose(mount)
+    body = f"""networks:
+  ai_network:
+    driver: bridge
+
+services:
+  duix-avatar-gen-video:
+    image: {img}
+    container_name: duix-avatar-gen-video
+    restart: always
+    runtime: nvidia
+    privileged: true
+    volumes:
+      - {mount_docker}:/code/data
+    environment:
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+    shm_size: '8g'
+    ports:
+      - '8383:8383'
+    command: python /code/app_local.py
+    networks:
+      - ai_network
+"""
+    compose.write_text(body, encoding="utf-8")
+    return compose
+
+
 def heygem_service_status(cfg: dict) -> dict:
     ready = health_check(cfg, timeout=2.0)
     api = (cfg.get("heygem") or {}).get("video_api", "http://127.0.0.1:8383")
@@ -53,13 +201,13 @@ def heygem_service_status(cfg: dict) -> dict:
     docker_ok = docker_available()
     present = duix_present()
     comp = component_present()
-    # Files / compose / component count as "downloaded"; ready still needs 8383 up.
-    installed = bool(comp or present or ready)
+    image_ok = heygem_docker_image_ready() if docker_cli else False
+    # Files / compose / component / loaded image count as "downloaded"; ready still needs 8383 up.
+    installed = bool(comp or present or ready or image_ok)
     is_strict = strict_user()
     hw = detect_hardware()
     max_vram = float(hw.get("max_vram_gb") or 0)
     cuda_ok = bool(hw.get("cuda_available"))
-    # 口播数字人通常需要独立 NVIDIA 显卡；无 GPU 时明确提示
     min_vram_gb = 6.0
     gpu_ok = cuda_ok and max_vram >= min_vram_gb
     if not cuda_ok:
@@ -79,14 +227,36 @@ def heygem_service_status(cfg: dict) -> dict:
         elif comp:
             hint = "口播引擎组件已安装但服务未运行。请点「一键启动」（无需 Docker Desktop）。"
             state = "component_stopped"
+        elif docker_ok and image_ok:
+            hint = (
+                "Docker 与口播镜像已就绪。请点「一键启动口播引擎」拉起 8383 "
+                "（迷你包：Docker + 夸克加速包，无需再装免 Docker 组件）。"
+            )
+            state = "image_ready"
+        elif docker_ok and not image_ok:
+            hint = (
+                "Docker 已运行，但尚未加载口播镜像。"
+                "请在向导第③步安装夸克加速包，第④步点「加载镜像」。"
+            )
+            state = "need_image"
+        elif image_ok and not docker_ok:
+            hint = (
+                "口播镜像已在本地，但 Docker Desktop 未就绪。"
+                "请打开 Docker，跳过登录，等到托盘就绪后再点「一键启动」。"
+            )
+            state = "docker_engine_down"
         else:
             hint = (
                 "口播引擎未安装。请到设置 → 特殊引擎安装 →「口播引擎安装向导」："
                 "安装 Docker Desktop → 用夸克加速包导入镜像并启动。"
             )
             state = "need_component"
-        can_start = bool(ready or comp) and (cuda_ok or ready)
-        runtime = "component" if comp else "none"
+        can_start = bool(ready or comp or (docker_ok and image_ok)) and (cuda_ok or ready)
+        runtime = (
+            "component"
+            if comp
+            else ("docker_image" if image_ok else ("docker" if docker_ok else "none"))
+        )
     else:
         if ready:
             hint = "口播引擎服务已就绪，可直接生成视频。"
@@ -94,12 +264,12 @@ def heygem_service_status(cfg: dict) -> dict:
         elif comp:
             hint = "口播引擎组件已安装但服务未运行。请点「一键启动」（无需 Docker Desktop）。"
             state = "component_stopped"
-        elif docker_ok and present:
+        elif docker_ok and (present or image_ok):
             hint = (
-                "本机已有 Duix 部署目录，Docker 可用。请点「一键启动口播引擎」拉起 8383。"
+                "本机 Docker 可用且镜像/部署已就绪。请点「一键启动口播引擎」拉起 8383。"
                 f"（{_DEV_DOCKER_NOTE}）"
             )
-            state = "stopped"
+            state = "stopped" if present else "image_ready"
         elif present and docker_cli and not docker_ok:
             hint = (
                 "本机已有 Duix 部署目录（算已下载），但 Docker Desktop 引擎未就绪："
@@ -114,9 +284,9 @@ def heygem_service_status(cfg: dict) -> dict:
                 "请安装并启动 Docker Desktop 后再启动口播引擎。"
             )
             state = "need_docker"
-        elif docker_ok and not present:
+        elif docker_ok and not present and not image_ok:
             hint = (
-                "Docker 可用但尚未克隆 Duix-Avatar。"
+                "Docker 可用但尚未克隆 Duix-Avatar / 未加载镜像。"
                 "有外网/梯子时可在「本机环境」安装 HeyGem，或运行 .\\scripts\\setup\\setup_heygem.ps1；"
                 "无 Docker Hub 时请用设置 → 口播引擎安装向导 + 夸克加速包。"
                 f"（{_DEV_DOCKER_NOTE}）"
@@ -129,9 +299,12 @@ def heygem_service_status(cfg: dict) -> dict:
                 "有梯子能访问 GitHub/Docker Hub 时，也可在「本机环境 · GPU 与模型」里直接安装 HeyGem（仍需 Docker）。"
             )
             state = "need_setup"
-        # 无独显时不允许启动；显存偏低仍可试，但前端会强提示
         can_start = bool(ready or comp or docker_ok) and (cuda_ok or ready)
-        runtime = "component" if comp else ("docker" if docker_ok else ("duix_files" if present else "none"))
+        runtime = (
+            "component"
+            if comp
+            else ("docker" if docker_ok else ("duix_files" if present else "none"))
+        )
 
     if gpu_hint and not ready:
         hint = f"{gpu_hint} {hint}".strip()
@@ -144,6 +317,7 @@ def heygem_service_status(cfg: dict) -> dict:
         "docker_cli": docker_cli,
         "duix_present": present,
         "component_installed": comp,
+        "image_loaded": image_ok,
         "installed": installed,
         "can_start": can_start,
         "deploy_dir": str(DEPLOY_DIR),
@@ -177,7 +351,8 @@ def start_heygem_stream_lines() -> list[str]:
     """Yield command argv for streaming start.
 
     P1: prefer component runtime launcher when installed.
-    Legacy: scripts/setup/setup_heygem.ps1 / docker compose (disabled in strict user mode).
+    Mini / strict: Docker + already-loaded quark image (no Duix git clone).
+    Legacy: scripts/setup/setup_heygem.ps1 / docker compose.
     """
     if component_present():
         launcher = ROOT / "data" / "components" / COMPONENT_ID / "start.ps1"
@@ -190,8 +365,33 @@ def start_heygem_stream_lines() -> list[str]:
                 "-File",
                 str(launcher),
             ]
-        # Marker without launcher yet — no-op command list signals UI
-        return []
+        # Marker without launcher — fall through to Docker if image is ready
+
+    # Mini installer path: image already docker-load'd via 夸克加速包
+    if docker_available():
+        img = resolve_heygem_docker_image()
+        if img:
+            compose = ensure_heygem_docker_compose(img)
+            if compose and compose.is_file():
+                return [
+                    "docker",
+                    "compose",
+                    "-f",
+                    str(compose),
+                    "up",
+                    "-d",
+                    "--remove-orphans",
+                ]
+        script_docker = ROOT / "scripts" / "setup" / "start_heygem_docker.ps1"
+        if script_docker.is_file() and (img or duix_present()):
+            return [
+                "powershell",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(script_docker),
+            ]
 
     if strict_user():
         return []
@@ -236,6 +436,39 @@ def stop_heygem() -> tuple[bool, str]:
                 err = (exc.stderr or exc.stdout or str(exc)).strip()
                 return False, err or "停止失败"
 
+    if docker_available():
+        compose = _runtime_root() / "heygem" / "deploy" / "docker-compose.yml"
+        try:
+            if compose.is_file():
+                subprocess.run(
+                    ["docker", "compose", "-f", str(compose), "down"],
+                    capture_output=True,
+                    text=True,
+                    timeout=120,
+                    check=False,
+                )
+            subprocess.run(
+                ["docker", "rm", "-f", "duix-avatar-gen-video"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if not strict_user():
+                cf = compose_file()
+                if cf:
+                    subprocess.run(
+                        ["docker", "compose", "-f", str(cf), "down"],
+                        cwd=str(DEPLOY_DIR),
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        check=False,
+                    )
+            return True, "口播引擎（Docker）已停止。"
+        except OSError as exc:
+            return False, str(exc)
+
     if strict_user():
         return (
             False,
@@ -245,18 +478,4 @@ def stop_heygem() -> tuple[bool, str]:
     cf = compose_file()
     if not cf:
         return False, "未找到可停止的口播引擎（组件或遗留 Docker 部署）。"
-    if not docker_available():
-        return False, "遗留 Docker 部署需要 Docker 在运行才能停止容器。"
-    try:
-        subprocess.run(
-            ["docker", "compose", "-f", str(cf), "down"],
-            cwd=str(DEPLOY_DIR),
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=True,
-        )
-        return True, "口播引擎（Docker 遗留）已停止。"
-    except subprocess.CalledProcessError as exc:
-        err = (exc.stderr or exc.stdout or str(exc)).strip()
-        return False, err or "停止失败"
+    return False, "遗留 Docker 部署需要 Docker 在运行才能停止容器。"

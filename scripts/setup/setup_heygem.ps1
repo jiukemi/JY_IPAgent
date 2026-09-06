@@ -1,9 +1,11 @@
 #Requires -Version 5.1
 # HeyGem / Duix-Avatar local digital human (lite: only :8383 video service)
 # Run: .\scripts\setup\setup_heygem.ps1
+# Source: Git if available; otherwise GitHub ZIP (no system Git required).
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "_project_root.ps1")
+. (Join-Path $PSScriptRoot "_repo_fetch.ps1")
 Set-Location $ProjectRoot
 
 $duix = Join-Path $ProjectRoot "tools\Duix-Avatar"
@@ -24,9 +26,39 @@ New-Item -ItemType Directory -Force -Path $mount | Out-Null
 Write-Host "==> HeyGem / Duix-Avatar (lite · port 8383 only)"
 Write-Host "Mount dir: $mount"
 
-if (-not (Test-Path "$duix\.git")) {
-    Write-Host "==> Clone Duix-Avatar..."
-    git clone --depth 1 https://github.com/duixcom/Duix-Avatar.git $duix
+function Test-DuixSource([string]$Dir) {
+  return (Test-Path (Join-Path $Dir "deploy")) -or (Test-Path (Join-Path $Dir ".git"))
+}
+
+if (-not (Test-DuixSource $duix)) {
+    Write-Host "==> Fetch Duix-Avatar..."
+    [void](Ensure-AgentMinGit)
+    $got = $false
+    foreach ($u in @(
+        "https://ghfast.top/https://github.com/duixcom/Duix-Avatar.git",
+        "https://kkgithub.com/duixcom/Duix-Avatar.git",
+        "https://github.com/duixcom/Duix-Avatar.git"
+      )) {
+      if (Invoke-AgentGitClone -Url $u -TargetDir $duix) {
+        if (Test-DuixSource $duix) { $got = $true; break }
+      }
+    }
+    if (-not $got) {
+      Write-Host "==> Git unavailable/failed — try ZIP"
+      $zipPath = Join-Path (Split-Path $duix -Parent) "Duix-Avatar_src.zip"
+      foreach ($zu in (Get-AgentGithubZipUrls -OwnerRepo "duixcom/Duix-Avatar" -Ref "main")) {
+        if (-not (Save-AgentUrlToFile -Url $zu -OutFile $zipPath -MinBytes 50000)) { continue }
+        if (Expand-AgentZipToDir -ZipPath $zipPath -TargetDir $duix) {
+          Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+          if (Test-DuixSource $duix) { $got = $true; break }
+        }
+        Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+      }
+    }
+    if (-not $got) {
+      Write-Host "[ERROR] Failed to fetch Duix-Avatar. Install Git or check network."
+      exit 1
+    }
 } else {
     Write-Host "==> Duix-Avatar already present"
 }
@@ -57,7 +89,7 @@ if (-not $dockerOk) {
 }
 
 # Patch volume mount (upstream compose hardcodes d:/duix_avatar_data)
-# Image selection: env AGENT_HEYGEM_IMAGE wins; else RTX 50 → 5090 variant; else default lite image.
+# Image selection: env AGENT_HEYGEM_IMAGE wins; else RTX 50 ->5090 variant; else default lite image.
 $forceImage = ($env:AGENT_HEYGEM_IMAGE -as [string]).Trim()
 $use5090 = $false
 $gpuName = ""
@@ -102,10 +134,10 @@ if ($forceImage) {
         "    volumes:",
         "      - ${mountDocker}:/code/data"
     )
-    Write-Host "==> GPU=$gpuName → recommend duix.avatar-5090 (set AGENT_HEYGEM_IMAGE to force another)"
+    Write-Host "==> GPU=$gpuName ->recommend duix.avatar-5090 (set AGENT_HEYGEM_IMAGE to force another)"
 } else {
     $picked = "guiji2025/duix.avatar (compose default)"
-    Write-Host "==> GPU=$gpuName → default duix.avatar (not 5090)"
+    Write-Host "==> GPU=$gpuName ->default duix.avatar (not 5090)"
 }
 $overrideLines -join "`n" | Set-Content -Path $overridePath -Encoding UTF8
 Write-Host "==> Volume override: $mountDocker -> /code/data"

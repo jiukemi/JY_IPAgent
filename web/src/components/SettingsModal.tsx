@@ -13,6 +13,7 @@ import {
   THIRD_PARTY_SUMMARY,
   AI_COMPLIANCE_NOTE,
 } from '../content/thirdPartyNotices'
+import { FAQ_ITEMS } from '../content/faq'
 
 type WorkerState = { enabled: boolean; running: boolean } | null
 
@@ -30,11 +31,12 @@ const MODES = [
   { value: 'cloud', label: '云端' },
 ]
 
-type SettingsTab = 'engines' | 'install' | 'about'
+type SettingsTab = 'engines' | 'install' | 'faq' | 'about'
 
 const SETTINGS_TABS: { id: SettingsTab; label: string }[] = [
   { id: 'engines', label: '全局引擎设置' },
   { id: 'install', label: '特殊引擎安装' },
+  { id: 'faq', label: '常见问题' },
   { id: 'about', label: '关于我们' },
 ]
 
@@ -76,6 +78,8 @@ export function SettingsModal({
   const [promptBusy, setPromptBusy] = useState(false)
   const [promptMsg, setPromptMsg] = useState('')
   const [tab, setTab] = useState<SettingsTab>('engines')
+  const [feedbackBusy, setFeedbackBusy] = useState(false)
+  const [feedbackMsg, setFeedbackMsg] = useState('')
   const loadedConfigRef = useRef<number | null>(null)
 
   useEffect(() => {
@@ -665,6 +669,94 @@ export function SettingsModal({
                 </SettingsCard>
               )}
             </>
+          )}
+
+          {tab === 'faq' && (
+            <SettingsCard title="常见问题" id="settings-faq">
+              <p className="text-[11px] leading-relaxed text-[var(--muted)]">
+                群里高频问题整理。仍解决不了时，用下方「一键反馈」导出诊断包发给群主（已脱敏 API Key）。
+              </p>
+              <div className="space-y-2">
+                {FAQ_ITEMS.map((item) => (
+                  <details
+                    key={item.id}
+                    className="rounded-xl border border-[var(--border)] bg-[var(--bg)] px-3 py-2"
+                  >
+                    <summary className="cursor-pointer select-none text-xs font-semibold text-[var(--text)]">
+                      {item.q}
+                    </summary>
+                    <p className="mt-2 whitespace-pre-line text-[11px] leading-relaxed text-[var(--muted)]">
+                      {item.a}
+                    </p>
+                  </details>
+                ))}
+              </div>
+              <div className="rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
+                <p className="text-xs font-semibold text-[var(--text)]">一键反馈错误</p>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-[var(--muted)]">
+                  桌面版会自动把诊断包存到「下载」文件夹并在资源管理器中选中，同时尝试打开邮件草稿。请把 zip
+                  发给群主，或附件发到{' '}
+                  <a
+                    href={FEEDBACK_MAILTO}
+                    className="font-medium text-[var(--accent)] underline-offset-2 hover:underline"
+                  >
+                    {FEEDBACK_EMAIL}
+                  </a>
+                  。微信群无法直接自动上传附件，需你手动发一次文件。
+                </p>
+                <button
+                  type="button"
+                  disabled={feedbackBusy}
+                  onClick={async () => {
+                    setFeedbackBusy(true)
+                    setFeedbackMsg('')
+                    try {
+                      const desk = (
+                        window as unknown as {
+                          agentDesktop?: {
+                            isDesktop?: boolean
+                            feedbackPack?: () => Promise<{
+                              ok: boolean
+                              path?: string
+                              message?: string
+                              cancelled?: boolean
+                            }>
+                            exportDiagnostics?: (opts?: { autoSave?: boolean }) => Promise<{
+                              ok: boolean
+                              path?: string
+                              message?: string
+                              cancelled?: boolean
+                            }>
+                          }
+                        }
+                      ).agentDesktop
+                      if (desk?.isDesktop && desk.feedbackPack) {
+                        const res = await desk.feedbackPack()
+                        if (res.cancelled) setFeedbackMsg('已取消')
+                        else setFeedbackMsg(res.message || (res.ok ? `已导出：${res.path || ''}` : '导出失败'))
+                      } else if (desk?.isDesktop && desk.exportDiagnostics) {
+                        const res = await desk.exportDiagnostics({ autoSave: true })
+                        setFeedbackMsg(res.message || (res.ok ? `已导出：${res.path || ''}` : '导出失败'))
+                        window.location.href = FEEDBACK_MAILTO
+                      } else {
+                        window.location.href = FEEDBACK_MAILTO
+                        setFeedbackMsg('浏览器模式：已打开邮件。请自行附上日志或截图。')
+                      }
+                    } catch (e) {
+                      setFeedbackMsg(e instanceof Error ? e.message : String(e))
+                    } finally {
+                      setFeedbackBusy(false)
+                    }
+                  }}
+                  className="mt-2 rounded-lg border border-[var(--border)] px-3 py-1.5 text-[11px] font-medium text-[var(--accent)] hover:bg-[var(--panel)] disabled:opacity-50"
+                >
+                  {feedbackBusy ? '正在打包…' : '一键导出诊断并反馈'}
+                </button>
+                {feedbackMsg ? (
+                  <p className="mt-2 whitespace-pre-line text-[11px] text-[var(--muted)]">{feedbackMsg}</p>
+                ) : null}
+              </div>
+            </SettingsCard>
           )}
 
           {tab === 'about' && (

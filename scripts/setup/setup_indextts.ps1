@@ -163,8 +163,13 @@ function Fetch-IndexTtsSource([string]$Target) {
     )
 
     if (-not (Get-GitExe)) {
-        Write-Host "==> Git not installed — try ZIP mirrors (recommend installing Git for Gitee)"
+        Write-Host "==> Git not installed — try portable MinGit then ZIP mirrors"
         Write-Host "    https://git-scm.com/download/win"
+        $shared = Join-Path $PSScriptRoot "_repo_fetch.ps1"
+        if (Test-Path $shared) {
+            . $shared
+            [void](Ensure-AgentMinGit)
+        }
     } else {
         Write-Host "==> try Gitee mirrors first (CN)"
         foreach ($url in $giteeUrls) {

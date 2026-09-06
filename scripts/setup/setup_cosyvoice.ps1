@@ -99,6 +99,15 @@ function Fetch-CosySource([string]$Target) {
   } else {
     Write-Host "==> 本机未检测到 Git，改用 ZIP 下载源码（无需安装 Git）"
     Write-Host "    可选：安装 Git for Windows 后重试更稳 https://git-scm.com/download/win"
+    [void](Ensure-AgentMinGit)
+    if (Get-AgentGitExe) {
+      Write-Host "==> 便携 Git 可用，再试 clone"
+      foreach ($url in $RepoMirrors) {
+        if (Invoke-AgentGitClone -Url $url -TargetDir $Target -Recursive) {
+          if (Test-CosySource $Target) { return $true }
+        }
+      }
+    }
   }
 
   Write-Host "==> try ZIP mirrors (no git / git failed)"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
 import { FileDropZone } from './FileDropZone'
 import { AlertModal, parseApiError } from './AlertModal'
@@ -14,6 +14,8 @@ type WizardState = {
     docker_available?: boolean
     docker_cli?: boolean
     gpu_hint?: string
+    can_start?: boolean
+    image_loaded?: boolean
   }
   recommended_pack?: {
     id: string
@@ -75,7 +77,9 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
   const [force, setForce] = useState(false)
   const [localPath, setLocalPath] = useState('')
   const [file, setFile] = useState<File | null>(null)
-  const [open, setOpen] = useState(true)
+  const [open, setOpen] = useState(false)
+  const probedOnce = useRef(false)
+  const [probeLoading, setProbeLoading] = useState(false)
   const [installDrive, setInstallDrive] = useState('')
   const [installerPath, setInstallerPath] = useState('')
   const [localInstallers, setLocalInstallers] = useState<
@@ -88,6 +92,7 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
   } | null>(null)
 
   const refresh = useCallback(async () => {
+    setProbeLoading(true)
     try {
       const s = await api.heygemWizard()
       setWiz(s)
@@ -104,21 +109,32 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
       })
     } catch (e) {
       setLog((prev) => [...prev.slice(-40), e instanceof Error ? e.message : String(e)])
+    } finally {
+      setProbeLoading(false)
     }
   }, [onReadyChange])
 
+  // First expand only — avoid disk/Docker scan every time settings reopen
   useEffect(() => {
+    if (!open) return
+    if (probedOnce.current) return
+    probedOnce.current = true
     void refresh()
-  }, [refresh])
+  }, [open, refresh])
+
+  const redetect = () => {
+    probedOnce.current = true
+    void refresh()
+  }
 
   const dockerPhase = wiz?.docker_install?.phase || 'idle'
   const dockerInstalling = dockerPhase === 'downloading' || dockerPhase === 'elevating'
 
   useEffect(() => {
-    if (!dockerInstalling) return
+    if (!open || !dockerInstalling) return
     const id = window.setInterval(() => void refresh(), 2000)
     return () => window.clearInterval(id)
-  }, [dockerInstalling, refresh])
+  }, [open, dockerInstalling, refresh])
 
   const push = (line: string) => setLog((prev) => [...prev.slice(-50), line])
 
@@ -241,12 +257,16 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
     try {
       const r = await api.heygemWizardScanDockerInstaller()
       setLocalInstallers(r.local_installers || [])
-      if (r.local_installers?.[0]?.path) setInstallerPath(r.local_installers[0].path)
+      const preferred =
+        (r.preferred_installer || '').trim() ||
+        r.local_installers?.[0]?.path ||
+        ''
+      if (preferred) setInstallerPath(preferred)
       push(r.message)
       setAlert({
-        title: r.local_installers?.length ? '已找到安装包' : '未找到安装包',
+        title: r.ok ? '已找到安装包（可装盘）' : '未找到 / 安装包不完整',
         message: r.message,
-        variant: r.local_installers?.length ? 'success' : 'warning',
+        variant: r.ok ? 'success' : 'warning',
       })
     } catch (e) {
       const { title, message } = parseApiError(e, '扫描失败')
@@ -378,9 +398,42 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
 
   if (!wiz) {
     return (
-      <div className="mt-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3 text-[11px] text-[var(--muted)]">
-        正在加载口播安装向导…
-      </div>
+      <>
+        <div className={`mt-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] ${compact ? 'p-2.5' : 'p-3'}`}>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <p className="text-xs font-semibold text-[var(--text)]">口播引擎安装向导</p>
+              <p className="mt-0.5 text-[10px] text-[var(--muted)]">
+                展开后检测一次 Docker / 显卡；之后可用「重新检测」。
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {open && probeLoading ? (
+                <span className="text-[10px] text-[var(--muted)]">检测中…</span>
+              ) : null}
+              <button
+                type="button"
+                className="text-[10px] text-[var(--muted)] underline"
+                onClick={() => setOpen((v) => !v)}
+              >
+                {open ? '收起' : '展开'}
+              </button>
+            </div>
+          </div>
+          {open && (
+            <p className="mt-2 text-[11px] text-[var(--muted)]">
+              {probeLoading ? '正在检测本机 Docker 与显卡，请稍候…' : '检测失败或尚未完成，可点展开后再试。'}
+            </p>
+          )}
+        </div>
+        <AlertModal
+          open={!!alert}
+          title={alert?.title || ''}
+          message={alert?.message || ''}
+          variant={alert?.variant}
+          onClose={() => setAlert(null)}
+        />
+      </>
     )
   }
 
@@ -395,7 +448,7 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
           <div>
             <p className="text-xs font-semibold text-[var(--text)]">口播引擎安装向导</p>
             <p className="mt-0.5 text-[10px] text-[var(--muted)]">
-              安装包保持小体积；大镜像用夸克包按需下载。按步骤完成即可，无需手敲命令。
+              安装包保持小体积；大镜像用夸克包按需下载。首次展开检测一次。
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -408,6 +461,16 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
             >
               {ready ? '已就绪' : `进行到第 ${step} 步`}
             </span>
+            {open && (
+              <button
+                type="button"
+                disabled={probeLoading || !!busy}
+                onClick={() => void redetect()}
+                className="rounded border border-[var(--border)] px-2 py-0.5 text-[10px] text-[var(--accent)] hover:bg-[var(--panel)] disabled:opacity-50"
+              >
+                {probeLoading ? '检测中…' : '重新检测'}
+              </button>
+            )}
             <button
               type="button"
               className="text-[10px] text-[var(--muted)] underline"

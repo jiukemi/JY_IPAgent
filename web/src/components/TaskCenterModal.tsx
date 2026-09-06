@@ -356,7 +356,7 @@ export function TaskCenterModal() {
             clearToast()
             setCenterOpen(true)
           }}
-          className="fixed bottom-6 right-6 z-[55] max-w-sm rounded-xl border border-[var(--border)] bg-[var(--panel)] px-4 py-3 text-left text-sm shadow-lg"
+          className="fixed bottom-6 right-6 z-[95] max-w-sm rounded-xl border border-[var(--border)] bg-[var(--panel)] px-4 py-3 text-left text-sm shadow-lg"
         >
           <div className="font-medium text-[var(--text)]">{toast.message}</div>
           <div className="mt-1 text-xs text-[var(--accent)]">打开任务中心</div>
@@ -365,7 +365,7 @@ export function TaskCenterModal() {
 
       {centerOpen && (
         <div
-          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]"
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-4 backdrop-blur-[2px]"
           role="presentation"
         >
           <div

@@ -162,7 +162,7 @@ latentsync:
 heygem:
   video_api: "http://127.0.0.1:8383"
   voice_api: "http://127.0.0.1:18180"
-  data_mount_host: "E:/agent/data/heygem_face2face"
+  data_mount_host: "data/heygem_face2face"
   data_mount_container: "/code/data"
   poll_interval_sec: 2
   timeout_sec: 3600
