@@ -351,20 +351,37 @@ export function TtsPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only react to voice library bumps
   }, [voiceVersion])
 
+  const lastSavedCloneRef = useRef<string>('')
+
   const closeCloneManage = useCallback(() => {
     setCloneManageOpen(false)
-    if (!cloneDirtyRef.current || !runtime?.engine) return
+    const prefer = lastSavedCloneRef.current || voiceUid
+    if (!cloneDirtyRef.current || !runtime?.engine) {
+      if (lastSavedCloneRef.current) setVoiceUid(lastSavedCloneRef.current)
+      return
+    }
     cloneDirtyRef.current = false
-    void loadVoices(runtime.engine, voiceUid, false, runtime.profile)
+    void loadVoices(runtime.engine, prefer, Boolean(lastSavedCloneRef.current), runtime.profile).then(() => {
+      if (lastSavedCloneRef.current) setVoiceUid(lastSavedCloneRef.current)
+    })
   }, [loadVoices, runtime?.engine, runtime?.profile, voiceUid])
 
   const onCloneLibraryChanged = useCallback(
     (nextUid?: string) => {
       cloneDirtyRef.current = true
+      if (nextUid?.startsWith('clone:')) lastSavedCloneRef.current = nextUid
       if (runtime?.engine) {
-        void loadVoices(runtime.engine, nextUid || voiceUid, Boolean(nextUid), runtime.profile).then(() => {
+        void (async () => {
+          try {
+            // 音色库更新后刷新 preset_ready（可用库内参考音顶替内置 examples）
+            const opts = await api.ttsOptions(runtime.engine)
+            setRuntime(opts)
+          } catch {
+            /* ignore */
+          }
+          await loadVoices(runtime.engine, nextUid || voiceUid, Boolean(nextUid), runtime.profile)
           if (nextUid) setVoiceUid(nextUid)
-        })
+        })()
       } else if (nextUid) {
         setVoiceUid(nextUid)
       }
@@ -577,7 +594,9 @@ export function TtsPage({
         runtime.mode === 'local'
           ? isCloneVoice
             ? '请先到顶栏「设置 → 本机环境」完成模型安装（克隆合成无需预设参考音）。'
-            : '预设音色需要参考音：可在「设置」里安装模型，或在本页上方保存参考音。'
+            : clones.length
+              ? '系统预设缺示例参考音。请改选下方「克隆音色」中你刚保存的音色，或到设置安装 IndexTTS 示例。'
+              : '预设音色需要参考音：可在「设置」里安装模型，或打开「音色管理」保存参考音后选用克隆音色。'
           : '请先完成云端引擎配置（展开引擎设置或打开顶栏「设置」）。'
       setAlert({
         title: '引擎未就绪',
@@ -1380,7 +1399,19 @@ export function TtsPage({
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
-              <ClonePage embedded onVoiceSaved={onCloneLibraryChanged} />
+              <ClonePage
+                embedded
+                onVoiceSaved={onCloneLibraryChanged}
+                onUseVoice={(uid) => {
+                  lastSavedCloneRef.current = uid
+                  setVoiceUid(uid)
+                  setCloneManageOpen(false)
+                  cloneDirtyRef.current = true
+                  if (runtime?.engine) {
+                    void loadVoices(runtime.engine, uid, true, runtime.profile)
+                  }
+                }}
+              />
             </div>
           </div>
         </div>

@@ -25,6 +25,8 @@ type Props = {
   onVoiceSaved?: (voiceUid?: string) => void
   /** When true, omit duplicate engine banner (shown on 配音 page already). */
   embedded?: boolean
+  /** Select a library voice for TTS (embedded in 配音音色管理). */
+  onUseVoice?: (voiceUid: string) => void
 }
 
 function useAudioDuration(src: string | null) {
@@ -52,7 +54,7 @@ function useAudioDuration(src: string | null) {
   return duration
 }
 
-export function ClonePage({ onVoiceSaved, embedded = false }: Props) {
+export function ClonePage({ onVoiceSaved, onUseVoice, embedded = false }: Props) {
   const [mode, setMode] = useState<InputMode>('upload')
   const [name, setName] = useState('')
   const [file, setFile] = useState<File | null>(null)
@@ -513,23 +515,22 @@ export function ClonePage({ onVoiceSaved, embedded = false }: Props) {
 
       {library.length > 0 && (
         <Panel title={`我的音色库 · ${library.length} 个`}>
-          <p className="mb-4 text-xs text-[var(--muted)]">点击卡片试听参考音；保存后可在下方「克隆音色」选用。</p>
+          <p className="mb-4 text-xs text-[var(--muted)]">
+            点击卡片试听；生成配音前请点「使用此音色」，或关闭后在下方「克隆音色」列表中点选。
+          </p>
           <div className="grid gap-3 sm:grid-cols-2">
             {library.map((v) => {
               const isPlaying = playingId === v.id
               const src = v.source_type === 'record' ? '录音' : v.source_type === 'upload' ? '上传' : '克隆'
+              const voiceUid = v.uid || `clone:${v.id}`
               return (
                 <div
                   key={v.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => void playLibraryVoice(v)}
-                  onKeyDown={(e) => e.key === 'Enter' && void playLibraryVoice(v)}
                   className={`group relative overflow-hidden rounded-2xl border p-4 text-left transition ${
                     isPlaying
                       ? 'border-[var(--accent)] bg-[var(--select-bg)] shadow-[0_0_24px_var(--select-shadow)]'
                       : 'border-[var(--border)] bg-[var(--bg)] hover:border-[var(--accent)] hover:shadow-md'
-                  } ${v.preview_url || v.local_path || v.reference_wav ? 'cursor-pointer' : 'cursor-default opacity-80'}`}
+                  }`}
                 >
                   <div
                     className="pointer-events-none absolute -right-6 -top-6 h-24 w-24 rounded-full opacity-20 blur-2xl transition group-hover:opacity-40"
@@ -585,11 +586,27 @@ export function ClonePage({ onVoiceSaved, embedded = false }: Props) {
                       删除
                     </button>
                   </div>
-                  {(v.preview_url || v.local_path || v.reference_wav) && (
-                    <p className="relative mt-3 text-[10px] text-[var(--muted)]">
-                      {isPlaying ? '播放中… 点击卡片暂停' : '点击卡片试听'}
-                    </p>
-                  )}
+                  <div className="relative mt-3 flex flex-wrap gap-2">
+                    {(v.preview_url || v.local_path || v.reference_wav) && (
+                      <button
+                        type="button"
+                        onClick={() => void playLibraryVoice(v)}
+                        className="rounded-lg border border-[var(--border)] px-2.5 py-1 text-[10px] text-[var(--muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+                      >
+                        {isPlaying ? '暂停试听' : '试听'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onUseVoice?.(voiceUid)
+                        onVoiceSaved?.(voiceUid)
+                      }}
+                      className="rounded-lg border border-[var(--select-border)] bg-[var(--select-bg)] px-2.5 py-1 text-[10px] font-medium text-[var(--accent)]"
+                    >
+                      使用此音色
+                    </button>
+                  </div>
                 </div>
               )
             })}

@@ -3,24 +3,118 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
 
+from workflow.bundle_paths import project_root
+
+
+def _candidate_voice_roots() -> list[Path]:
+    """Prefer runtime data dir (desktop), then project data/, then cwd-relative legacy."""
+    roots: list[Path] = []
+    rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
+    if rt:
+        roots.append(Path(rt).expanduser().resolve() / "data" / "voices")
+    roots.append(project_root() / "data" / "voices")
+    try:
+        roots.append(Path("data/voices").resolve())
+    except OSError:
+        pass
+    seen: set[str] = set()
+    out: list[Path] = []
+    for r in roots:
+        key = str(r)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(r)
+    return out
+
+
+def voices_root() -> Path:
+    """Writable root for new saves; prefer existing library if present."""
+    cands = _candidate_voice_roots()
+    for r in cands:
+        if (r / "index.json").is_file():
+            return r
+    return cands[0]
+
+
+def _index_path() -> Path:
+    return voices_root() / "index.json"
+
+
+# Back-compat aliases (some code imported these as constants)
+def _sync_legacy_aliases() -> None:
+    global VOICES_ROOT, INDEX_PATH
+    VOICES_ROOT = voices_root()
+    INDEX_PATH = _index_path()
+
+
 VOICES_ROOT = Path("data/voices")
 INDEX_PATH = VOICES_ROOT / "index.json"
+_sync_legacy_aliases()
 
 
 def _load_index() -> dict:
-    if not INDEX_PATH.exists():
-        return {"voices": []}
-    return json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+    _sync_legacy_aliases()
+    # Merge voices from all candidate roots (runtime + legacy project)
+    by_id: dict[str, dict] = {}
+    order: list[str] = []
+    for root in _candidate_voice_roots():
+        idx = root / "index.json"
+        if not idx.is_file():
+            continue
+        try:
+            data = json.loads(idx.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for v in data.get("voices") or []:
+            if not isinstance(v, dict):
+                continue
+            vid = str(v.get("id") or "")
+            if not vid or vid in by_id:
+                continue
+            repaired = dict(v)
+            repaired["reference_wav"] = str(
+                resolve_voice_wav(repaired, root=root) or repaired.get("reference_wav") or ""
+            )
+            by_id[vid] = repaired
+            order.append(vid)
+    return {"voices": [by_id[i] for i in order]}
 
 
 def _save_index(data: dict) -> None:
-    VOICES_ROOT.mkdir(parents=True, exist_ok=True)
-    INDEX_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    root = voices_root()
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "index.json"
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    _sync_legacy_aliases()
+
+
+def resolve_voice_wav(entry: dict, *, root: Path | None = None) -> Path | None:
+    """Resolve a usable reference wav for a library entry (repairs moved installs)."""
+    candidates: list[Path] = []
+    raw = str(entry.get("reference_wav") or "").strip()
+    if raw:
+        candidates.append(Path(raw))
+    vid = str(entry.get("id") or "").strip()
+    roots = [root] if root is not None else _candidate_voice_roots()
+    if vid:
+        for r in roots:
+            if r is None:
+                continue
+            candidates.append(r / vid / "reference.wav")
+    for c in candidates:
+        try:
+            if c.is_file() and c.stat().st_size > 100:
+                return c.resolve()
+        except OSError:
+            continue
+    return None
 
 
 def list_voices() -> list[dict]:
@@ -59,6 +153,11 @@ def get_voice(voice_id: str) -> dict | None:
         return None
     for v in list_voices():
         if v["id"] == voice_id:
+            wav = resolve_voice_wav(v)
+            if wav is not None:
+                out = dict(v)
+                out["reference_wav"] = str(wav)
+                return out
             return v
     return None
 
@@ -68,7 +167,7 @@ def update_voice(voice_id: str, **fields) -> dict:
     for v in data.get("voices", []):
         if v["id"] == voice_id:
             v.update(fields)
-            _save_index(data)
+            _save_index({"voices": data["voices"]})
             return v
     raise ValueError(f"音色不存在: {voice_id}")
 
@@ -88,8 +187,10 @@ def save_voice(
     if not src.exists():
         raise FileNotFoundError(f"参考音频不存在: {reference_path}")
 
+    root = voices_root()
+    root.mkdir(parents=True, exist_ok=True)
     vid = uuid.uuid4().hex[:12]
-    dest_dir = VOICES_ROOT / vid
+    dest_dir = root / vid
     dest_dir.mkdir(parents=True, exist_ok=True)
     ext = (src.suffix or ".wav").lower()
     upload_copy = dest_dir / f"upload{ext}"
@@ -141,8 +242,8 @@ def save_voice(
         "created_at": datetime.now().isoformat(timespec="seconds"),
     }
     data = _load_index()
-    data.setdefault("voices", []).insert(0, entry)
-    _save_index(data)
+    merged = [entry] + [v for v in data.get("voices", []) if v.get("id") != vid]
+    _save_index({"voices": merged})
     return entry
 
 
@@ -167,15 +268,20 @@ def delete_voice(voice_id: str) -> bool:
     voices = data.get("voices", [])
     kept = []
     removed = False
+    target_root = voices_root()
     for v in voices:
         if v["id"] == voice_id:
             removed = True
-            p = Path(v.get("reference_wav", ""))
-            if p.parent.exists() and p.parent != VOICES_ROOT:
-                shutil.rmtree(p.parent, ignore_errors=True)
+            wav = resolve_voice_wav(v)
+            if wav is not None and wav.parent.exists() and wav.parent != target_root:
+                shutil.rmtree(wav.parent, ignore_errors=True)
+            else:
+                for root in _candidate_voice_roots():
+                    d = root / voice_id
+                    if d.is_dir():
+                        shutil.rmtree(d, ignore_errors=True)
         else:
             kept.append(v)
     if removed:
-        data["voices"] = kept
-        _save_index(data)
+        _save_index({"voices": kept})
     return removed

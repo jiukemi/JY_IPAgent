@@ -261,12 +261,12 @@ def find_indextts_reference(cfg: dict) -> Path | None:
         if candidate.is_file() and candidate.stat().st_size > 100:
             return candidate.resolve()
 
-    from tts.voices import list_voices
+    from tts.voices import list_voices, resolve_voice_wav
 
     for voice in list_voices():
-        ref = Path(voice.get("reference_wav", ""))
-        if ref.is_file() and ref.stat().st_size > 100:
-            return ref.resolve()
+        found_wav = resolve_voice_wav(voice)
+        if found_wav is not None:
+            return found_wav
     return None
 
 
@@ -289,7 +289,8 @@ def resolve_indextts_reference(
     if mode == "clone":
         raise FileNotFoundError(
             "IndexTTS2 克隆模式需要参考音频。\n"
-            "请在 ② 配音页上方保存克隆音色，并选择「克隆音色」。"
+            "音色已选克隆，但未能解析到 reference.wav（音色库路径可能失效）。\n"
+            "请在音色管理中删除该音色后重新上传保存。"
         )
 
     it_cfg = cfg.get("indextts", {})
@@ -298,11 +299,15 @@ def resolve_indextts_reference(
     preset_refs = {**INDEXTTS_DEFAULT_PRESET_REFS, **(it_cfg.get("preset_refs") or {})}
     if preset_id and preset_id in preset_refs:
         rel = preset_refs[preset_id]
-        candidate = install / rel if not Path(rel).is_absolute() else Path(rel)
-        if not candidate.is_file():
-            candidate = resolve_path(rel, project_root())
-        if candidate.is_file() and candidate.stat().st_size > 100:
-            return str(candidate.resolve())
+        rel_name = Path(rel).name
+        for cand in (
+            install / rel if not Path(rel).is_absolute() else Path(rel),
+            install / "checkpoints" / "examples" / rel_name,
+            install / "examples" / rel_name,
+            resolve_path(rel, project_root()),
+        ):
+            if cand.is_file() and cand.stat().st_size > 100:
+                return str(cand.resolve())
 
     found = find_indextts_reference(cfg)
     if found:
@@ -310,7 +315,8 @@ def resolve_indextts_reference(
 
     raise FileNotFoundError(
         "IndexTTS2 需要参考音频（wav/mp3/m4a 等均可，会自动转换）。\n"
-        "可选：① 一键安装下载内置示例；② 在配音页保存任一条参考音到音色库。"
+        "可选：① 一键安装下载内置示例；② 在配音页「音色管理」保存参考音后，"
+        "在下方「克隆音色」中点选该音色再生成。"
     )
 
 
@@ -534,9 +540,17 @@ def resolve_clone_reference(
 ) -> tuple[str | None, str]:
     """Return (wav_path, saved prompt_text if any)."""
     if saved_voice_id:
+        from tts.voices import resolve_voice_wav
+
         entry = get_voice(saved_voice_id)
         if entry:
-            return entry["reference_wav"], entry.get("prompt_text", "")
+            wav = resolve_voice_wav(entry)
+            path = str(wav) if wav is not None else (entry.get("reference_wav") or None)
+            return path, entry.get("prompt_text", "")
+    if reference_wav:
+        p = Path(reference_wav)
+        if p.is_file() and p.stat().st_size > 100:
+            return str(p.resolve()), ""
     return reference_wav, ""
 
 
@@ -646,12 +660,20 @@ def synthesize(
             if venv_python(cfg, "indextts_dir") == sys.executable:
                 raise RuntimeError("IndexTTS2 未安装，请运行 .\\scripts\\setup\\setup_indextts.ps1")
             if mode == "clone" and not ref:
-                raise ValueError("克隆需要上传参考音或选择已保存音色")
-            ref_prepared = None
-            if ref:
-                ref_prepared = _prepare_reference_wav(
-                    ffmpeg_bin, ref, output_dir, sample_rate=22050
+                raise ValueError(
+                    "克隆需要上传参考音或选择已保存音色。"
+                    "请打开「音色管理」保存后，在下方「克隆音色」中点选该音色。"
                 )
+            # 必须在父进程解析参考音并传入绝对路径：worker cwd/配置可能找不到 examples 与音色库
+            resolved_ref = resolve_indextts_reference(
+                cfg,
+                mode=mode,
+                preset_id=preset_id or "mandarin_female_warm",
+                reference_wav=ref,
+            )
+            ref_prepared = _prepare_reference_wav(
+                ffmpeg_bin, resolved_ref, output_dir, sample_rate=22050
+            )
             clone_prompt = prompt_text or _saved_prompt
             _indextts_subprocess(
                 cfg,

@@ -20,7 +20,19 @@ def format_user_error(message: str, *, engine: str | None = None) -> str:
     msg = (message or "").strip()
     eng = (engine or "").lower()
 
-    if "IndexTTS2" in msg or "需要参考音频" in msg or "缺少参考音频" in msg:
+    # 克隆音色路径问题：必须保留原文，勿吞成「没选中 / 缺 examples」
+    if "克隆参考音不存在" in msg or ("克隆" in msg and "reference" in msg.lower()):
+        return f"克隆参考音无效\n\n{msg}"
+
+    if "IndexTTS2 克隆模式需要参考音频" in msg:
+        return (
+            "IndexTTS2 · 克隆音色未带上参考音\n\n"
+            f"{msg}\n\n"
+            "常见原因：音色库里的 reference.wav 路径在升级/换盘后失效。"
+            "请在「音色管理」删除后重新上传保存，再点「使用此音色」。"
+        )
+
+    if "IndexTTS2 需要参考音频" in msg or msg.startswith("IndexTTS2 · 缺少参考音频"):
         if eng and eng not in ("indextts", ""):
             return (
                 f"当前引擎是 {eng}，但报错来自 IndexTTS2。\n"
@@ -29,12 +41,17 @@ def format_user_error(message: str, *, engine: str | None = None) -> str:
             )
         return (
             "IndexTTS2 · 缺少参考音频\n\n"
-            "原因：预设音色需要示例参考 wav，克隆音色需先在本页保存。\n\n"
+            "原因：这次合成没有拿到可用的参考 wav"
+            "（系统预设缺内置 examples，或克隆音色的 reference 路径无效）。\n\n"
             "处理：\n"
-            "1. 预设模式 → 展开「引擎与模型」→ 一键安装 / 运行 scripts/setup/setup_indextts.ps1\n"
-            "2. 克隆模式 → 在 ② 配音页上方保存后，选「克隆音色」\n"
+            "1. 克隆：音色管理重新保存 → 点「使用此音色」→ 再生成\n"
+            "2. 预设：设置 → 本机环境 → 一键安装 IndexTTS（下载 examples）\n"
             "3. 若不用 IndexTTS2 → 切换到 CosyVoice2 / Piper 等已安装引擎"
         )
+
+    # 其它引擎的「需要参考音频」不要伪装成 IndexTTS2
+    if "需要参考音频" in msg and "IndexTTS2" not in msg:
+        return msg
 
     if "未安装" in msg and "setup_" in msg:
         m = re.search(r"setup_\w+\.ps1", msg)

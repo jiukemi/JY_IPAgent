@@ -415,8 +415,23 @@ def run_tts(
 
     clone_prompt = ""
     if params["mode"] == "clone":
+        from tts.voices import resolve_voice_wav
+
         entry = get_voice(params["saved_voice_id"])
+        if not entry:
+            raise ValueError(
+                f"克隆音色不存在或索引丢失（id={params.get('saved_voice_id')}），请重新在音色管理中保存"
+            )
+        wav = resolve_voice_wav(entry)
+        if wav is None:
+            raise FileNotFoundError(
+                f"克隆参考音不存在或无效（id={entry.get('id')} name={entry.get('name')}）："
+                f"{entry.get('reference_wav') or '（无路径）'}。"
+                "请删除该音色后重新上传保存。"
+            )
         clone_prompt = (entry or {}).get("prompt_text", "")
+        # 强制带上绝对路径，避免 synthesize 再解析失败
+        params = {**params, "_resolved_ref": str(wav)}
 
     try:
         extra = (style_extra or "").strip() or (params.get("style_extra") or "")
@@ -427,6 +442,7 @@ def run_tts(
             mode=params["mode"],
             preset_id=params["preset_id"] or "mandarin_female_warm",
             style_extra=extra,
+            reference_wav=params.get("_resolved_ref"),
             saved_voice_id=params.get("saved_voice_id"),
             prompt_text=clone_prompt,
             backend=effective_backend,

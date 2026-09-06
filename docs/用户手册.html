@@ -301,6 +301,12 @@
 
     <section class="card" id="s6">
       <h2>6. 常见问题</h2>
+      <p class="faq-q">刚下载装好后该装哪些大模型？（为你解决方案）</p>
+      <p>
+        迷你包不含大模型，按流水线每步只装一个即可：① 文案 → FunASR；② 配音 → IndexTTS2；③ 口播 → Docker + HeyGem（按显卡选通用/RTX50 夸克包）。
+        装完后务必到 <strong>设置 → 全局引擎设置</strong> 把对应步骤改成上述引擎并保存，否则页面仍可能引用旧选项。
+      </p>
+
       <p class="faq-q">端口被占用</p>
       <p>默认尝试 <code>7860</code>，被占用时会自动换邻近端口。看启动窗口提示的实际地址。</p>
 
@@ -308,6 +314,23 @@
       <p>
         Python、FFmpeg、模型、Docker 镜像都可能很大。保持联网；可改用国内镜像（如
         <code>config.yaml</code> 中的 <code>hf_endpoint</code>）。无外网时用设置里的夸克加速包。
+      </p>
+
+      <p class="faq-q">Docker 只能装 C 盘 / C 盘满</p>
+      <p>
+        请用 <strong>0.1.30+</strong>：先下完整 Docker Desktop 安装包（约 500MB+），在「口播引擎安装向导」里扫描 →
+        选有空间的盘 → 安装到该盘。UAC 点是，往往要几分钟。
+      </p>
+
+      <p class="faq-q">IndexTTS2 报「缺少参考音频」（已上传克隆音色）</p>
+      <p>
+        <strong>0.1.31+</strong> 已加强路径解析。仍遇到时：① 音色管理保存到音色库；② 下方「克隆音色」再点选；③
+        可重装 IndexTTS 补 examples；④ 删了重传后再试。
+      </p>
+
+      <p class="faq-q">提取文案失败 / 已选 FunASR 仍提 Whisper</p>
+      <p>
+        请用 <strong>0.1.30+</strong>：设置里文案步骤选「本地」+ FunASR（或 Whisper）并保存；本机环境装好对应引擎；需本机 Chrome。
       </p>
 
       <p class="faq-q">口播页提示引擎未就绪</p>

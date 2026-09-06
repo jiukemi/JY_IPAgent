@@ -8,6 +8,18 @@ export type FaqItem = {
 
 export const FAQ_ITEMS: FaqItem[] = [
   {
+    id: 'starter-models',
+    q: '刚下载装好后，该装哪些大模型？（为你解决方案）',
+    a:
+      '迷你安装包不含大模型，请按流水线「每步只装一个」即可开跑（有 NVIDIA 显卡时）：\n'
+      + '① 文案提取 → 本机环境安装 FunASR（推荐；也可用 Whisper）\n'
+      + '② 配音 → 安装 IndexTTS2（推荐本地克隆/中英混读）\n'
+      + '③ 数字人口播 → 装 Docker Desktop + 按显卡选 HeyGem 夸克包（通用或 RTX50）并 load\n'
+      + '④ 剪辑合成一般不用再下大模型\n'
+      + '装好后务必打开「设置 → 全局引擎设置」：文案选「本地 + FunASR」、配音选「本地 + IndexTTS2」、口播选 HeyGem，点保存。'
+      + '只装模型不改全局引用，页面仍可能走旧引擎或报未就绪。显存紧张可把配音改成 Piper/Edge（轻量，效果不同）。',
+  },
+  {
     id: 'boot-96',
     q: '启动卡住约 96% 怎么办？',
     a:
@@ -17,13 +29,19 @@ export const FAQ_ITEMS: FaqItem[] = [
     id: 'docker-drive',
     q: 'Docker Desktop 只能装 C 盘、体积太大，或注册页打不开？',
     a:
-      '请先自行下载完整的「Docker Desktop Installer.exe」（通常约 500MB+，资源管理器里看文件大小）。再到「设置 → 特殊引擎安装 → 口播引擎安装向导」：扫描/选择安装包 → 选盘 → 安装到所选目录。扫描到文件但只有一两百 MB，多半是下残了，几秒就会失败。个人使用通常不必注册 Docker Hub，登录窗可跳过；验收以本机 docker info 成功为准。',
+      '请用 0.1.30 及以上：先自行下完整「Docker Desktop Installer.exe」（约 500MB+，资源管理器看大小）。再到「设置 → 特殊引擎安装 → 口播引擎安装向导」：扫描/选安装包 → 选有空间的盘 → 安装到所选目录。扫描到文件但只有一两百 MB 多半下残了。C 盘满时勿指望再拷到 AppData；装到 D/E 即可。个人使用通常不必注册 Docker Hub；验收以本机 docker info 成功为准。UAC 点是，安装往往要几分钟。',
+  },
+  {
+    id: 'indextts-ref',
+    q: 'IndexTTS2 提示「缺少参考音频」，但音色管理里已上传并选了克隆音色？',
+    a:
+      '0.1.31+ 已加强参考音路径解析。若仍遇到：① 音色管理上传并点「保存到音色库」；② 关闭后在下方「克隆音色」点选该条（高亮），不要停在系统预设；③ 系统预设也要能用则到本机环境重装 IndexTTS 补 examples；④ 仍失败则删除该音色后重新上传，确认能试听再生成。',
   },
   {
     id: 'extract-script',
-    q: '提取文案失败怎么办？',
+    q: '提取文案失败 / 本地已选 FunASR 仍提示装 Whisper？',
     a:
-      '请确认已安装谷歌 Chrome（不必登录谷歌账号）。并在「设置 → 本机环境」安装 Whisper 或 FunASR 至少其中一个，且在文案页选用对应引擎。',
+      '请用 0.1.30 及以上。在「设置 → 全局引擎设置」把文案步骤设为「本地」且引擎选 FunASR（或 Whisper），保存后再到文案页提取。并确认「本机环境」已装对应引擎。提取需本机有谷歌 Chrome（不必登录谷歌账号）。',
   },
   {
     id: 'min-vram',
@@ -52,6 +70,6 @@ export const FAQ_ITEMS: FaqItem[] = [
     id: 'engine-fail',
     q: '引擎安装失败怎么办？',
     a:
-      '先确认网络，有条件可开梯子后重试。未安装 Git 时，IndexTTS / CosyVoice / SadTalker 会改用 ZIP 下载源码，一般仍可装；口播主路径走 Docker/夸克，不必强依赖 Git。整合包尚在准备中。急用可联系群主。失败时请用下方「一键反馈」附上诊断包。',
+      '先确认网络，有条件可开梯子后重试。未安装 Git 时，IndexTTS / CosyVoice / SadTalker 会改用 ZIP 下载源码，一般仍可装；口播主路径走 Docker/夸克，不必强依赖 Git。旧电脑报 FFmpeg/Python 找不到或 _repo_fetch 解析错误时，请升到 0.1.30+。整合包尚在准备中。急用可联系群主。失败时请用下方「一键反馈」附上诊断包。',
   },
 ]
