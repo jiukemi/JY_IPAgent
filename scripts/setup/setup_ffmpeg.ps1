@@ -8,18 +8,34 @@ $ErrorActionPreference = "Stop"
 function Resolve-RuntimePython {
   $rt = ($env:AGENT_RUNTIME_DIR -as [string]).Trim()
   if ($rt) {
-    $cand = Join-Path $rt "venv\Scripts\python.exe"
-    if (Test-Path $cand) { return $cand }
+    foreach ($rel in @(
+        "python\python.exe",
+        "venv\Scripts\python.exe",
+        "python\python3.exe"
+      )) {
+      $cand = Join-Path $rt $rel
+      if (Test-Path -LiteralPath $cand) { return $cand }
+    }
   }
-  $projVenv = Join-Path $ProjectRoot "data\runtime\venv\Scripts\python.exe"
-  if (Test-Path $projVenv) { return $projVenv }
+  $projRoot = $ProjectRoot
+  foreach ($rel in @(
+      "data\runtime\python\python.exe",
+      "data\runtime\venv\Scripts\python.exe"
+    )) {
+    $cand = Join-Path $projRoot $rel
+    if (Test-Path -LiteralPath $cand) { return $cand }
+  }
   foreach ($cmd in @("py", "python")) {
     try {
       $p = & $cmd -3.11 -c "import sys; print(sys.executable)" 2>$null
       if ($p) { return ($p | Select-Object -First 1).ToString().Trim() }
     } catch { }
   }
-  throw "No Python found for FFmpeg install (set AGENT_RUNTIME_DIR or install Python 3.11)"
+  try {
+    $p = & python -c "import sys; print(sys.executable)" 2>$null
+    if ($p) { return ($p | Select-Object -First 1).ToString().Trim() }
+  } catch { }
+  throw "No Python found for FFmpeg install (set AGENT_RUNTIME_DIR with python\python.exe, or install Python 3.11)"
 }
 
 $py = Resolve-RuntimePython

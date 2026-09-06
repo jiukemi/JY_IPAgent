@@ -2,6 +2,15 @@
 
 本文件使用中文记录面向用户的版本说明。发版时 GitHub / Gitee Release 正文与此处保持一致。
 
+## 0.1.30 — 2026-09-06
+
+> **C 盘满仍要装 Docker、本地 FunASR 误报 Whisper、旧机装引擎报 `_repo_fetch` / FFmpeg 的用户请更新。**
+
+### 修复
+- Docker 装到其他盘：C 盘满时**不再**往 `%LOCALAPPDATA%` 再拷 500MB；扫描只用下载目录原文件，安装时复制到所选盘；临时目录也落到目标盘。
+- 本地文案选 FunASR 后与 `transcript.provider` / 提取链路同步，不再误回退并提示「请安装 Whisper」。
+- `_repo_fetch.ps1` 改为 ASCII + UTF-8 BOM，避免旧系统 PowerShell 解析 `}` 报错；`setup_ffmpeg.ps1` 能找到运行时便携 `python\python.exe`。
+
 ## 0.1.29 — 2026-09-06
 
 > **Docker 装到其他盘几秒就失败的用户请更新。** 「扫描到了 / 已准备安装」不等于装成功。

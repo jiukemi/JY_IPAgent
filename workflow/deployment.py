@@ -79,6 +79,12 @@ def step_engine(cfg: dict, step: StepName) -> str:
         raw = (cfg.get("tts") or {}).get("backend") or "indextts"
         return normalize_tts_engine(mode, raw)
     if step == "script" and mode == "local":
+        # Prefer deployment.engines.script.local; else sync from transcript.provider
+        # (users who only flipped FunASR in settings used to still hit Whisper).
+        tr = ((cfg.get("script") or {}).get("cloud") or {}).get("transcript") or {}
+        prov = (tr.get("provider") or "").strip().lower()
+        if prov in ("funasr", "local_whisper"):
+            return prov
         return "local_whisper"
     if step == "script" and mode == "cloud":
         return "cloud_17zhiling"

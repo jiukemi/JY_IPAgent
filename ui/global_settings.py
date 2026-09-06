@@ -74,9 +74,15 @@ def load_settings_values(cfg: dict) -> dict:
     tr = cloud.get("transcript") or {}
     rw = cloud.get("rewrite") or {}
     q3 = cfg.get("qwen3_tts") or {}
+    script_mode = step_mode(cfg, "script")
+    script_engine = engine_value(cfg, "script")
+    tr_raw = tr.get("provider") or ASR_PROTOCOL_SYNC_VIDEOURL
+    # Keep local ASR engine and transcript.provider in sync for the UI
+    if script_mode == "local" and script_engine in ("funasr", "local_whisper"):
+        tr_raw = script_engine
     return {
-        "script_mode": step_mode(cfg, "script"),
-        "script_engine": engine_value(cfg, "script"),
+        "script_mode": script_mode,
+        "script_engine": script_engine,
         "whisper_model": sc.get("whisper_model") or "small",
         "tts_mode": step_mode(cfg, "tts"),
         "tts_engine": engine_value(cfg, "tts"),
@@ -87,9 +93,7 @@ def load_settings_values(cfg: dict) -> dict:
         "cdn_provider": normalize_cdn_provider(cdn.get("provider") or CDN_PROTOCOL_NONE),
         "cdn_api_url": cdn.get("api_url") or "",
         "cdn_api_key": cdn.get("api_key") or "",
-        "transcript_provider": normalize_transcript_provider(
-            tr.get("provider") or ASR_PROTOCOL_SYNC_VIDEOURL
-        ),
+        "transcript_provider": normalize_transcript_provider(tr_raw),
         "transcript_api_url": tr.get("api_url") or "",
         "transcript_api_key": tr.get("api_key") or "",
         "rewrite_api_key": rw.get("api_key") or "",
@@ -161,6 +165,12 @@ def _apply_script_engine(cfg: dict, mode: str, engine: str) -> None:
     mode = (mode or "local").lower()
     engine = (engine or "").strip()
     if mode == "local":
+        engines = cfg.setdefault("deployment", {}).setdefault("engines", {}).setdefault("script", {})
+        if not isinstance(engines, dict):
+            engines = {}
+            cfg.setdefault("deployment", {}).setdefault("engines", {})["script"] = engines
+        if engine in ("funasr", "local_whisper"):
+            engines["local"] = engine
         tr = cfg.setdefault("script", {}).setdefault("cloud", {}).setdefault("transcript", {})
         if engine == "funasr":
             tr["provider"] = "funasr"

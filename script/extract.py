@@ -462,7 +462,14 @@ def extract_script_from_media(
     wav = work_dir / "reference_16k.wav"
     extract_audio_for_asr(ffmpeg_bin, media_path, wav)
     _emit(on_progress, 0.2, "语音识别…")
+    from workflow.deployment import step_engine, step_mode
+
     provider = ((cfg.get("script") or {}).get("cloud") or {}).get("transcript", {}).get("provider")
+    if step_mode(cfg, "script") == "local":
+        # Local 文案引擎优先：避免设置里选了 FunASR，但 transcript.provider 仍是云端协议
+        eng = step_engine(cfg, "script")
+        if eng in ("funasr", "local_whisper"):
+            provider = eng
     return transcribe_local(cfg, wav, provider=provider, on_progress=on_progress)
 
 
@@ -475,15 +482,18 @@ def transcribe_local(
 ) -> str:
     """Dispatch to FunASR or Whisper based on the transcript provider.
 
-    Falls back to Whisper when FunASR isn't installed.
+    When the user explicitly selected FunASR, do **not** silently fall back to
+    Whisper (that produced「请安装 Whisper」while FunASR was the configured engine).
     """
     provider = (provider or "funasr").strip().lower()
     if provider == "funasr":
-        if _funasr_available(cfg):
-            try:
-                return transcribe_funasr(cfg, wav_path, on_progress=on_progress)
-            except Exception as exc:
-                _emit(on_progress, 0.25, f"FunASR 失败，回退 Whisper：{exc}")
-        else:
-            _emit(on_progress, 0.25, "FunASR 未安装，回退 Whisper")
+        if not _funasr_available(cfg):
+            raise RuntimeError(
+                "已选择本地 FunASR，但本机 FunASR 未就绪（需 funasr + torch）。\n"
+                "请到设置 → 本机环境安装 FunASR，或运行 .\\scripts\\setup\\setup_funasr.ps1"
+            )
+        try:
+            return transcribe_funasr(cfg, wav_path, on_progress=on_progress)
+        except Exception as exc:
+            raise RuntimeError(f"FunASR 转写失败：{exc}") from exc
     return transcribe_whisper(cfg, wav_path, on_progress=on_progress)

@@ -140,27 +140,28 @@ def _purge_truncated_installer(path: Path) -> None:
         pass
 
 
+def _drive_free_bytes(path: Path) -> int | None:
+    try:
+        return int(shutil.disk_usage(str(path.resolve().anchor or path)).free)
+    except OSError:
+        try:
+            return int(shutil.disk_usage(str(path)).free)
+        except OSError:
+            return None
+
+
 def _normalize_installer_path(
     installer: Path,
     *,
     prefer_root: Path | None = None,
 ) -> Path:
-    """Copy installer to a no-space path so cmd.exe / UAC never break on spaces.
+    """Ensure a usable installer path for elevated install (no-space name when possible).
 
-    Prefer ``prefer_root\\DockerDesktopInstaller.exe`` (target install drive) so
-    elevated install does not depend on a tiny/locked C: LOCALAPPDATA copy.
-    Falls back to %LOCALAPPDATA%\\JY_IPAgent\\DockerDesktopInstaller.exe.
+    When C: is full, never copy the ~500MB package into %LOCALAPPDATA%.
+    Prefer: in-place rename (spaces only) → copy onto prefer_root (target drive) →
+    use source as-is if path has no spaces.
     """
     src = installer.expanduser().resolve()
-    if prefer_root is not None:
-        try:
-            prefer_root.mkdir(parents=True, exist_ok=True)
-            dest = (prefer_root / "DockerDesktopInstaller.exe").resolve()
-        except OSError:
-            dest = _installer_cache_path()
-    else:
-        dest = _installer_cache_path()
-    _purge_truncated_installer(dest)
     if not _installer_looks_valid(src):
         size = 0
         try:
@@ -170,34 +171,69 @@ def _normalize_installer_path(
         raise RuntimeError(
             f"安装包无效或不完整：{src}（{_installer_size_hint(size)}，"
             f"完整包通常约 500MB+，至少需 {_installer_size_hint(_DOCKER_INSTALLER_MIN_BYTES)}）。"
-            "「扫描到文件」不等于「下完整了」。请用浏览器/夸克重新下载后再扫描。"
         )
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if src.resolve() == dest.resolve():
-            return dest
-    except OSError:
-        pass
-    need_copy = (
-        (" " in str(src))
-        or (" " in src.name)
-        or (src.name != dest.name)
-        or (not dest.is_file())
-        or (dest.is_file() and dest.stat().st_size != src.stat().st_size)
-    )
-    if need_copy:
+
+    # Already a good no-space path
+    if " " not in str(src) and " " not in src.name:
+        if prefer_root is None:
+            return src
+        # Still stage onto target drive when asked (C: full → install from D:)
         try:
+            prefer_root.mkdir(parents=True, exist_ok=True)
+            dest = (prefer_root / "DockerDesktopInstaller.exe").resolve()
+            if src.resolve() == dest.resolve():
+                return dest
             if dest.is_file() and dest.stat().st_size == src.stat().st_size:
                 return dest
+            free = _drive_free_bytes(prefer_root)
+            need = src.stat().st_size + (50 * 1024 * 1024)
+            if free is not None and free < need:
+                # Target drive also tight — run installer from original path
+                return src
+            _set_docker_install(
+                message=f"正在复制安装包到目标盘（不占 C 盘）：{dest}",
+            )
+            shutil.copy2(src, dest)
+            if _installer_looks_valid(dest):
+                return dest
+        except OSError as exc:
+            _set_docker_install(message=f"目标盘复制跳过（将用原路径安装）：{exc}")
+            return src
+        return src
+
+    # Filename has spaces — rename in place (no extra disk space)
+    if " " in src.name and " " not in str(src.parent):
+        renamed = src.parent / "DockerDesktopInstaller.exe"
+        try:
+            if renamed.is_file() and renamed.stat().st_size == src.stat().st_size:
+                return renamed.resolve()
+            if not renamed.exists():
+                src.rename(renamed)
+                return renamed.resolve()
         except OSError:
             pass
-        _set_docker_install(
-            message=f"正在把安装包复制到无空格路径（约 {_installer_size_hint(src.stat().st_size)}，请稍候）：{dest}",
-        )
-        shutil.copy2(src, dest)
-    if not _installer_looks_valid(dest):
-        raise RuntimeError(f"复制安装包失败：{dest}")
-    return dest
+
+    # Copy to prefer_root (other drive) — never force LOCALAPPDATA on full C:
+    if prefer_root is not None:
+        try:
+            prefer_root.mkdir(parents=True, exist_ok=True)
+            dest = (prefer_root / "DockerDesktopInstaller.exe").resolve()
+            if dest.is_file() and dest.stat().st_size == src.stat().st_size:
+                return dest
+            _set_docker_install(message=f"正在复制安装包到目标盘：{dest}")
+            shutil.copy2(src, dest)
+            if _installer_looks_valid(dest):
+                return dest
+        except OSError as exc:
+            raise RuntimeError(
+                f"无法复制安装包到目标盘 {prefer_root}：{exc}\n"
+                "请确认所选盘空间充足；C 盘满时不要依赖 C:\\Users\\…\\AppData 缓存。"
+            ) from exc
+
+    raise RuntimeError(
+        f"安装包路径含空格且无法复制到目标盘：{src}\n"
+        "请把安装包放到所选盘（如 D:\\）后再扫描，或先清理目标盘空间。"
+    )
 
 
 def materialize_scanned_docker_installer(
@@ -230,32 +266,46 @@ def materialize_scanned_docker_installer(
                 "放到「下载」文件夹后再扫。"
             ),
         }
-    try:
-        normalized = _normalize_installer_path(src)
-    except Exception as exc:  # noqa: BLE001
+    # Scan only — never copy ~500MB into %LOCALAPPDATA% (breaks when C: is full).
+    # "安装到所选盘" stages onto the selected drive.
+    normalized = src.expanduser().resolve()
+    if not _installer_looks_valid(normalized):
+        size = 0
+        try:
+            size = normalized.stat().st_size if normalized.is_file() else 0
+        except OSError:
+            pass
         return {
             "ok": False,
             "local_installers": found,
             "preferred_installer": "",
             "source_installer": str(src),
             "copied": False,
-            "message": str(exc),
+            "message": (
+                f"扫到的文件过小或不完整（{_installer_size_hint(size)}）。"
+                f"完整包通常约 500MB+。"
+            ),
         }
-    copied = False
-    try:
-        copied = src.resolve() != normalized.resolve()
-    except OSError:
-        copied = str(src) != str(normalized)
+    renamed = False
+    if " " in normalized.name and " " not in str(normalized.parent):
+        cand = normalized.parent / "DockerDesktopInstaller.exe"
+        try:
+            if cand.is_file() and cand.stat().st_size == normalized.stat().st_size:
+                normalized = cand.resolve()
+                renamed = True
+            elif not cand.exists():
+                normalized.rename(cand)
+                normalized = cand.resolve()
+                renamed = True
+        except OSError:
+            pass
     size = normalized.stat().st_size
-    # Prefer showing the no-space path first in the list
     preferred_entry = {
         "path": str(normalized),
         "name": normalized.name,
         "bytes": size,
         "size_gb": round(size / (1024**3), 2),
-        "label": (
-            f"{normalized.name}（{round(size / (1024**3), 2)} GB · 已去空格，可直接安装）"
-        ),
+        "label": f"{normalized.name}（{round(size / (1024**3), 2)} GB · {normalized.parent}）",
     }
     merged = [preferred_entry]
     seen = {str(normalized).lower()}
@@ -264,23 +314,18 @@ def materialize_scanned_docker_installer(
         if key and key not in seen:
             seen.add(key)
             merged.append(item)
-    msg_bits = [
-        f"已找到安装包（{_installer_size_hint(size)}）。",
-    ]
-    if copied or (" " in str(src)) or (" " in src.name):
-        msg_bits.append(
-            f"原文件名含空格，已复制为无空格路径（不改动下载目录原文件）：\n{normalized}"
-        )
-    else:
-        msg_bits.append(f"安装包路径：\n{normalized}")
-    msg_bits.append("可直接点「安装到所选盘」。")
+    msg = (
+        f"已找到安装包（{_installer_size_hint(size)}）：\n{normalized}\n"
+        + ("已去掉文件名空格（同目录重命名，不占额外空间）。\n" if renamed else "")
+        + "C 盘满也没关系：点「安装到所选盘」时会复制到目标盘再装，不往 C:\\Users\\…\\AppData 再拷一份。"
+    )
     return {
         "ok": True,
         "local_installers": merged,
         "preferred_installer": str(normalized),
         "source_installer": str(src),
-        "copied": copied or (" " in str(src)) or (" " in src.name),
-        "message": "\n".join(msg_bits),
+        "copied": renamed,
+        "message": msg,
     }
 
 
@@ -422,13 +467,9 @@ def _download_docker_installer(dest: Path) -> None:
 
 def _write_docker_install_cmd(installer: Path, install_root: Path) -> Path:
     """Write install .cmd (+ .ps1) to Desktop / Downloads / install_root."""
-    # Stage installer onto the *target* drive (no spaces). Avoid C: LOCALAPPDATA-only copies.
+    # Stage onto target drive only — never mirror into LOCALAPPDATA when C: is full.
     install_root.mkdir(parents=True, exist_ok=True)
     installer = _normalize_installer_path(installer, prefer_root=install_root)
-    try:
-        _normalize_installer_path(installer, prefer_root=_installer_cache_path().parent)
-    except Exception:
-        pass
 
     app_dir = install_root / "DockerDesktop"
     wsl_root = install_root / "wsl"
@@ -471,6 +512,11 @@ def _write_docker_install_cmd(installer: Path, install_root: Path) -> Path:
         "}",
         "New-Item -ItemType Directory -Force -Path $app | Out-Null",
         "New-Item -ItemType Directory -Force -Path $wsl | Out-Null",
+        # Keep installer TEMP off a full C: drive when possible
+        "$tmpDir = Join-Path (Split-Path $app -Parent) '_jy_docker_tmp'",
+        "New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null",
+        "$env:TEMP = $tmpDir",
+        "$env:TMP = $tmpDir",
         '"=== JY Docker install $(Get-Date -Format o) ===`nexe=$exe`napp=$app`nwsl=$wsl`nsize=$size`n" | Set-Content -LiteralPath $log -Encoding UTF8',
         "Write-Host ''",
         "Write-Host 'Starting Docker Desktop installer (admin)...'",
@@ -708,9 +754,8 @@ def prepare_docker_desktop_install(
             f"--wsl-default-data-root={install_root / 'wsl'}",
         ],
         "message": (
-            f"安装脚本已生成（尚未装完）：将用 {normalized.name} 装到 {install_root}。"
-            f"接下来会请求管理员权限；真正安装通常要几分钟。"
-            f"若几秒就失败，请看目标盘 jy-docker-install.log，多半是安装包未下完整（需约 500MB+）。"
+            f"安装脚本已生成（尚未装完）。安装包将从目标盘使用：{normalized.name} → {install_root}。"
+            f"C 盘满时请继续点管理员确认；真正安装通常要几分钟。"
             f"脚本：{cmd_path}"
         ),
     }

@@ -1,6 +1,6 @@
-# Shared helpers: locate Git, download ZIP, fetch GitHub-style repos without requiring Git on PATH.
-# Dot-source from setup_*.ps1 only. Safe for machines that already have Git (prefer git clone).
-#Requires -Version 5.1
+﻿# Shared helpers: locate Git, download ZIP, fetch GitHub-style repos without requiring Git on PATH.
+# Dot-source from setup_*.ps1 only. Prefer system Git; optional MinGit; always keep ZIP fallback.
+# NOTE: ASCII-only messages 鈥?UTF-8 without BOM breaks older Windows PowerShell parsers.
 
 function Get-AgentGitExe {
   $cmd = Get-Command git -ErrorAction SilentlyContinue
@@ -17,17 +17,14 @@ function Get-AgentGitExe {
 }
 
 function Ensure-AgentMinGit {
-  <#
-    Optional portable MinGit. Needs short online access.
-    Never throws — returns git path or $null; callers must keep ZIP fallback.
-  #>
+  # Optional portable MinGit. Never throws 鈥?returns git path or $null.
   $existing = Get-AgentGitExe
   if ($existing) { return $existing }
   $dest = Join-Path $env:LOCALAPPDATA "JY_IPAgent\mingit"
   $gitExe = Join-Path $dest "cmd\git.exe"
   if (Test-Path -LiteralPath $gitExe) { return $gitExe }
 
-  Write-Host "==> 未检测到 Git：尝试下载便携 MinGit（约 1 分钟超时；失败则改用 ZIP，不阻塞）"
+  Write-Host "==> Git not found: try portable MinGit (short timeout; else ZIP)"
   $zip = Join-Path $env:TEMP "JY_MinGit.zip"
   $urls = @(
     "https://ghfast.top/https://github.com/git-for-windows/git/releases/download/v2.47.1.windows.1/MinGit-2.47.1-64-bit.zip",
@@ -53,18 +50,17 @@ function Ensure-AgentMinGit {
         }
       }
     } catch {
-      Write-Host "    MinGit mirror failed: $($_.Exception.Message)"
+      Write-Host ("    MinGit mirror failed: " + $_.Exception.Message)
     }
   }
   if (-not $ok) {
-    Write-Host "    跳过便携 Git（无网或超时）；后续用 ZIP 拉源码即可"
+    Write-Host "    skip MinGit; ZIP fallback will be used"
     return $null
   }
   try {
     Remove-Item -LiteralPath $dest -Recurse -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
     Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force
-    # MinGit zip may unpack into dest\ directly or one subfolder
     if (-not (Test-Path -LiteralPath $gitExe)) {
       $inner = Get-ChildItem $dest -Directory | Select-Object -First 1
       if ($inner -and (Test-Path (Join-Path $inner.FullName "cmd\git.exe"))) {
@@ -75,13 +71,13 @@ function Ensure-AgentMinGit {
       }
     }
   } catch {
-    Write-Host "    MinGit expand failed: $($_.Exception.Message)"
+    Write-Host ("    MinGit expand failed: " + $_.Exception.Message)
     return $null
   } finally {
     Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
   }
   if (Test-Path -LiteralPath $gitExe) {
-    Write-Host "==> 便携 Git 就绪: $gitExe"
+    Write-Host ("==> portable Git ready: " + $gitExe)
     return $gitExe
   }
   return $null
@@ -93,7 +89,7 @@ function Save-AgentUrlToFile {
     [Parameter(Mandatory = $true)][string]$OutFile,
     [int]$MinBytes = 20000
   )
-  Write-Host "==> download $Url"
+  Write-Host ("==> download " + $Url)
   Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
   try {
     $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
@@ -108,7 +104,7 @@ function Save-AgentUrlToFile {
       return $true
     }
   } catch {
-    Write-Host "    download failed: $($_.Exception.Message)"
+    Write-Host ("    download failed: " + $_.Exception.Message)
   }
   Remove-Item -LiteralPath $OutFile -Force -ErrorAction SilentlyContinue
   return $false
@@ -136,7 +132,7 @@ function Expand-AgentZipToDir {
     Move-Item -LiteralPath $inner.FullName -Destination $TargetDir
     return (Test-Path -LiteralPath $TargetDir)
   } catch {
-    Write-Host "    expand failed: $($_.Exception.Message)"
+    Write-Host ("    expand failed: " + $_.Exception.Message)
     return $false
   } finally {
     Remove-Item -LiteralPath $unpack -Recurse -Force -ErrorAction SilentlyContinue
@@ -159,7 +155,7 @@ function Invoke-AgentGitClone {
   $args = @("clone", "--depth", "1")
   if ($Recursive) { $args += "--recursive" }
   $args += @($Url, $TargetDir)
-  Write-Host "==> git clone $Url"
+  Write-Host ("==> git clone " + $Url)
   $prevLfs = $env:GIT_LFS_SKIP_SMUDGE
   if ($SkipLfs) { $env:GIT_LFS_SKIP_SMUDGE = "1" }
   try {
@@ -167,9 +163,9 @@ function Invoke-AgentGitClone {
     if ($p.ExitCode -eq 0 -and (Test-Path -LiteralPath $TargetDir)) {
       return $true
     }
-    Write-Host ("    git failed exit={0}" -f $p.ExitCode)
+    Write-Host ("    git failed exit=" + $p.ExitCode)
   } catch {
-    Write-Host "    git failed: $($_.Exception.Message)"
+    Write-Host ("    git failed: " + $_.Exception.Message)
   } finally {
     if ($SkipLfs) {
       if ($null -eq $prevLfs) { Remove-Item Env:GIT_LFS_SKIP_SMUDGE -ErrorAction SilentlyContinue }
@@ -185,7 +181,6 @@ function Get-AgentGithubZipUrls {
     [Parameter(Mandatory = $true)][string]$OwnerRepo,
     [string]$Ref = "main"
   )
-  # owner/repo e.g. FunAudioLLM/CosyVoice
   $pathZip = "$OwnerRepo/archive/refs/heads/$Ref.zip"
   $codeload = "https://codeload.github.com/$OwnerRepo/zip/refs/heads/$Ref"
   return @(
