@@ -280,7 +280,13 @@ if (Test-Path "$InstallDir\.venv") {
 Write-Host "==> Download IndexTTS-2 checkpoints (large, may take a while)..."
 $env:HF_ENDPOINT = "https://hf-mirror.com"
 $ckpt = Join-Path $InstallDir "checkpoints"
-if (-not (Test-Path (Join-Path $ckpt "config.yaml"))) {
+$emoCfg = Join-Path $ckpt "qwen0.6bemo4-merge\config.json"
+$needCkpt = -not (Test-Path (Join-Path $ckpt "config.yaml"))
+$needEmo = -not (Test-Path $emoCfg)
+if ($needCkpt -or $needEmo) {
+    if ($needEmo -and -not $needCkpt) {
+        Write-Host "==> checkpoints present but qwen0.6bemo4-merge missing — repair download"
+    }
     # Prefer ModelScope in CN when available.
     # Use a temp .py file — inline `python -c "..."` breaks under nested quotes / paths.
     $msOk = $false
@@ -290,11 +296,19 @@ if (-not (Test-Path (Join-Path $ckpt "config.yaml"))) {
         Write-Host "==> try ModelScope download IndexTeam/IndexTTS-2"
         $dlPy = Join-Path $InstallDir "_ms_download_indextts2.py"
         $env:INDEXTTS_CKPT_DIR = $ckpt
-        @(
-            "import os"
-            "from modelscope import snapshot_download"
-            "snapshot_download('IndexTeam/IndexTTS-2', local_dir=os.environ['INDEXTTS_CKPT_DIR'])"
-        ) | Set-Content -Path $dlPy -Encoding UTF8
+        if ($needCkpt) {
+            @(
+                "import os"
+                "from modelscope import snapshot_download"
+                "snapshot_download('IndexTeam/IndexTTS-2', local_dir=os.environ['INDEXTTS_CKPT_DIR'])"
+            ) | Set-Content -Path $dlPy -Encoding UTF8
+        } else {
+            @(
+                "import os"
+                "from modelscope import snapshot_download"
+                "snapshot_download('IndexTeam/IndexTTS-2', local_dir=os.environ['INDEXTTS_CKPT_DIR'], allow_patterns=['qwen0.6bemo4-merge/*','qwen0.6bemo4-merge/**'])"
+            ) | Set-Content -Path $dlPy -Encoding UTF8
+        }
         try {
             if ($Py -eq "py") { & py -3.11 $dlPy }
             else { & $Py $dlPy }
@@ -302,14 +316,36 @@ if (-not (Test-Path (Join-Path $ckpt "config.yaml"))) {
             Remove-Item $dlPy -Force -ErrorAction SilentlyContinue
             Remove-Item Env:INDEXTTS_CKPT_DIR -ErrorAction SilentlyContinue
         }
-        if (Test-Path (Join-Path $ckpt "config.yaml")) { $msOk = $true }
+        if ((Test-Path (Join-Path $ckpt "config.yaml")) -and (Test-Path $emoCfg)) { $msOk = $true }
     } catch {
         Write-Host "    ModelScope failed: $($_.Exception.Message)"
     }
     if (-not $msOk) {
         Write-Host "==> fallback: hf-mirror download"
-        uv run hf download IndexTeam/IndexTTS-2 --local-dir $ckpt
+        if ($needCkpt) {
+            uv run hf download IndexTeam/IndexTTS-2 --local-dir $ckpt
+        } else {
+            uv run hf download IndexTeam/IndexTTS-2 --local-dir $ckpt --include "qwen0.6bemo4-merge/*"
+        }
     }
+}
+if (-not (Test-Path (Join-Path $ckpt "config.yaml"))) {
+    throw "IndexTTS checkpoints/config.yaml missing after download"
+}
+if (-not (Test-Path $emoCfg)) {
+    throw "IndexTTS qwen0.6bemo4-merge missing after download (required for clone/emotion TTS)"
+}
+# Strip trailing slash in qwen_emo_path — avoids HF treating Windows paths as repo ids
+$ckptYaml = Join-Path $ckpt "config.yaml"
+try {
+    $raw = Get-Content -LiteralPath $ckptYaml -Raw -Encoding UTF8
+    $fixed = [regex]::Replace($raw, '(?m)^qwen_emo_path:\s*.+$', "qwen_emo_path: qwen0.6bemo4-merge")
+    if ($fixed -ne $raw) {
+        Set-Content -LiteralPath $ckptYaml -Value $fixed -Encoding UTF8
+        Write-Host "==> normalized qwen_emo_path (no trailing slash)"
+    }
+} catch {
+    Write-Host "!! qwen_emo_path normalize skipped: $($_.Exception.Message)"
 }
 
 Write-Host "==> Download example reference audio (preset voices need voice_01.wav)..."

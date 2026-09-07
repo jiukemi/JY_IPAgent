@@ -57,6 +57,13 @@ export const FAQ_ITEMS: FaqItem[] = [
       + '处理：① 升到 0.1.35+（会自动找运行时模型）；② 设置 → 本机环境 → 安装/重装 IndexTTS2，等 checkpoints 下完；③ 确认已选克隆音色再合成。勿只拷安装包目录里的空 tools 路径。',
   },
   {
+    id: 'indextts-hf-repo-id',
+    q: '配音报 HFValidationError / Repo id … qwen0.6bemo4-merge？',
+    a:
+      '情感子模型 qwen0.6bemo4-merge（约 1.2GB）没下全时，Windows 路径会被 HuggingFace 当成仓库名而报错。\n'
+      + '处理：升到 0.1.36+ 后重试（会自动补下）；或设置 → 本机环境 → 重装 IndexTTS2，确认 runtime\\engines\\IndexTTS\\checkpoints\\qwen0.6bemo4-merge 里有 config.json 与大体积权重。',
+  },
+  {
     id: 'extract-script',
     q: '提取文案失败 / 本地已选 FunASR 仍提示装 Whisper？',
     a:

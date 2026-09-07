@@ -80,13 +80,106 @@ def model_paths(cfg: dict) -> tuple[Path, Path]:
     return cfg_path, model_dir
 
 
+def _qwen_emo_dir(model_dir: Path) -> Path:
+    return (model_dir / "qwen0.6bemo4-merge").resolve()
+
+
+def qwen_emo_ready(model_dir: Path) -> bool:
+    emo = _qwen_emo_dir(model_dir)
+    cfg_ok = (emo / "config.json").is_file()
+    # weights may be safetensors or split; require a sizable weight file
+    weight_ok = False
+    for name in ("model.safetensors", "pytorch_model.bin", "model.safetensors.index.json"):
+        p = emo / name
+        if p.is_file() and (name.endswith(".json") or p.stat().st_size > 100_000_000):
+            weight_ok = True
+            break
+    if not weight_ok:
+        for p in emo.glob("*.safetensors"):
+            if p.stat().st_size > 100_000_000:
+                weight_ok = True
+                break
+    return cfg_ok and weight_ok
+
+
+def ensure_qwen_emo_model(model_dir: Path) -> Path:
+    """Ensure qwen0.6bemo4-merge exists; incomplete installs cause HFValidationError on Windows."""
+    emo = _qwen_emo_dir(model_dir)
+    if qwen_emo_ready(model_dir):
+        return emo
+
+    model_dir.mkdir(parents=True, exist_ok=True)
+    last_err = ""
+    # Prefer ModelScope in CN, then HF mirror.
+    try:
+        from modelscope import snapshot_download
+
+        snapshot_download(
+            "IndexTeam/IndexTTS-2",
+            local_dir=str(model_dir),
+            allow_patterns=["qwen0.6bemo4-merge/*", "qwen0.6bemo4-merge/**"],
+        )
+    except Exception as exc:
+        last_err = f"modelscope: {exc}"
+    if not qwen_emo_ready(model_dir):
+        try:
+            from huggingface_hub import snapshot_download as hf_snap
+
+            os_env_endpoint = __import__("os").environ.setdefault(
+                "HF_ENDPOINT", "https://hf-mirror.com"
+            )
+            _ = os_env_endpoint
+            hf_snap(
+                "IndexTeam/IndexTTS-2",
+                local_dir=str(model_dir),
+                allow_patterns=["qwen0.6bemo4-merge/*", "qwen0.6bemo4-merge/**"],
+                local_dir_use_symlinks=False,
+            )
+        except Exception as exc:
+            last_err = (last_err + f"; hf: {exc}").strip("; ")
+
+    if not qwen_emo_ready(model_dir):
+        raise FileNotFoundError(
+            f"IndexTTS2 情感模型缺失或不完整: {emo}\n"
+            "这会导致 HuggingFace 把 Windows 路径误判为 repo id（HFValidationError）。\n"
+            "请到「设置 → 本机环境」重装 IndexTTS2，确保下载完 qwen0.6bemo4-merge（约 1.2GB）。\n"
+            f"详情: {last_err or '未找到 config.json / 权重文件'}"
+        )
+    return emo
+
+
+def prepare_indextts_cfg(cfg_path: Path, model_dir: Path) -> Path:
+    """Write a runtime config with absolute POSIX qwen_emo_path (Windows-safe for transformers)."""
+    emo = ensure_qwen_emo_model(model_dir)
+    try:
+        from omegaconf import OmegaConf
+
+        oc = OmegaConf.load(str(cfg_path))
+        oc.qwen_emo_path = emo.as_posix()
+        out = model_dir / "config.agent.yaml"
+        OmegaConf.save(oc, str(out))
+        return out
+    except Exception:
+        # Fallback: text patch (no OmegaConf in some envs)
+        raw = cfg_path.read_text(encoding="utf-8")
+        line = f'qwen_emo_path: "{emo.as_posix()}"'
+        if re.search(r"(?m)^qwen_emo_path\s*:", raw):
+            raw = re.sub(r"(?m)^qwen_emo_path\s*:.*$", line, raw)
+        else:
+            raw = raw.rstrip() + "\n" + line + "\n"
+        out = model_dir / "config.agent.yaml"
+        out.write_text(raw, encoding="utf-8")
+        return out
+
+
 def create_index_tts2(cfg: dict):
     from indextts.infer_v2 import IndexTTS2
 
     it_cfg = cfg.get("indextts", {})
     cfg_path, model_dir = model_paths(cfg)
+    patched = prepare_indextts_cfg(cfg_path, model_dir)
     return IndexTTS2(
-        cfg_path=str(cfg_path.resolve()),
+        cfg_path=str(patched.resolve()),
         model_dir=str(model_dir.resolve()),
         use_fp16=bool(it_cfg.get("use_fp16", True)),
         use_cuda_kernel=bool(it_cfg.get("use_cuda_kernel", False)),

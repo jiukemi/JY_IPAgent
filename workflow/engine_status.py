@@ -62,6 +62,7 @@ def _first_existing(*paths: Path) -> Path | None:
 
 def _indextts_status(cfg: dict) -> dict:
     from tts.engine import resolve_indextts_install_dir
+    from tts.indextts_core import qwen_emo_ready
 
     install = resolve_indextts_install_dir(cfg)
     it = cfg.get("indextts") or {}
@@ -71,6 +72,10 @@ def _indextts_status(cfg: dict) -> dict:
         missing.append("Python 虚拟环境未安装")
     if not (model_dir / "config.yaml").is_file():
         missing.append("模型权重 checkpoints（需运行 scripts/setup/setup_indextts.ps1）")
+    elif not qwen_emo_ready(model_dir):
+        missing.append(
+            "情感模型 qwen0.6bemo4-merge 不完整（约 1.2GB，请重装 IndexTTS2）"
+        )
     ref = find_indextts_reference(cfg)
     preset_missing: list[str] = []
     if not ref:
@@ -78,7 +83,11 @@ def _indextts_status(cfg: dict) -> dict:
             "缺少预设参考音：可一键安装下载内置示例，或在 ② 配音页保存任一条参考音"
             "（支持 wav/mp3/m4a 等，自动转换）"
         )
-    installed = _venv_ok(cfg, "indextts_dir") and (model_dir / "config.yaml").is_file()
+    installed = (
+        _venv_ok(cfg, "indextts_dir")
+        and (model_dir / "config.yaml").is_file()
+        and qwen_emo_ready(model_dir)
+    )
     ready = installed
     preset_ready = installed and ref is not None
     return {
