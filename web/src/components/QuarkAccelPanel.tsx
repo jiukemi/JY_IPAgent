@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
+import { AccelPackLinks } from './AccelPackLinks'
 import { FileDropZone } from './FileDropZone'
 
 type Pack = {
@@ -8,6 +9,8 @@ type Pack = {
   pack_kind: string
   gpu_family: string
   approx_size_gb?: number
+  download_url?: string
+  download_label?: string
   share_url?: string
   share_extract_code?: string
   zip_name?: string
@@ -36,6 +39,7 @@ export function QuarkAccelPanel() {
   const [portalNote, setPortalNote] = useState('')
   const [shareRoot, setShareRoot] = useState('')
   const [shareCode, setShareCode] = useState('')
+  const [releasesUrl, setReleasesUrl] = useState('')
   const [candidates, setCandidates] = useState<
     Array<{ path: string; bytes: number; bundle_name?: string; gpu_family?: string; pack_id?: string }>
   >([])
@@ -51,6 +55,7 @@ export function QuarkAccelPanel() {
       setPortalNote(cat.portal_note || '')
       setShareRoot(cat.share_root_url || '')
       setShareCode(cat.share_extract_code || '')
+      setReleasesUrl(cat.releases_url || '')
       setInstalled((cat.installed as Record<string, unknown>) || null)
       const scan = await api.quarkScan()
       setCandidates(scan.candidates || [])
@@ -131,10 +136,10 @@ export function QuarkAccelPanel() {
     <div className="space-y-3 rounded-xl border border-[var(--border)] bg-[var(--bg)] p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
-          <p className="text-xs font-semibold text-[var(--text)]">网盘加速线 · 夸克包</p>
+          <p className="text-xs font-semibold text-[var(--text)]">加速包下载 · 仓库优先</p>
           <p className="mt-0.5 text-[10px] leading-relaxed text-[var(--muted)]">
             {portalNote ||
-              '无外网时：夸克下载加速包 → 扫描 / 填路径 / 拖入 zip。口播引擎按显卡分「通用」与「RTX50」两包，勿下错。'}
+              '推荐从 GitHub Releases 下加速包（大文件为分卷 .part1/.part2…，须全部下到同一文件夹）→ 扫描安装。夸克仅备用。口播按显卡分「通用 / RTX50」，勿下错。'}
           </p>
         </div>
         <button
@@ -159,15 +164,23 @@ export function QuarkAccelPanel() {
         </div>
       )}
 
+      {releasesUrl && (
+        <div className="text-[11px]">
+          <a href={releasesUrl} target="_blank" rel="noreferrer" className="font-medium text-[var(--accent)] underline">
+            打开 GitHub 加速包页面（分卷·推荐）
+          </a>
+        </div>
+      )}
+
       {shareRoot && (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
           <a
             href={shareRoot}
             target="_blank"
             rel="noreferrer"
-            className="text-[var(--accent)] underline"
+            className="text-[var(--muted)] underline"
           >
-            打开夸克分享入口
+            夸克分享入口（备用）
           </a>
           {shareCode ? (
             <span className="text-[var(--muted)]">
@@ -202,21 +215,7 @@ export function QuarkAccelPanel() {
               </span>
             </div>
             {p.note && <p className="mt-1 text-[10px] text-[var(--muted)]">{p.note}</p>}
-            {p.share_url ? (
-              <a
-                href={p.share_url}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-1 inline-block text-[10px] text-[var(--accent)] underline"
-              >
-                夸克下载
-                {p.share_extract_code ? `（提取码 ${p.share_extract_code}）` : ''}
-              </a>
-            ) : (
-              <p className="mt-1 text-[10px] text-amber-700/90">
-                分享链接未配置（运营填 data/quark/catalog.json）
-              </p>
-            )}
+            <AccelPackLinks pack={p} />
           </div>
         ))}
       </div>
@@ -232,19 +231,7 @@ export function QuarkAccelPanel() {
               <span className="text-[10px] text-[var(--muted)]">≈{p.approx_size_gb ?? '?'} GB</span>
             </div>
             {p.note && <p className="mt-1 text-[10px] text-[var(--muted)]">{p.note}</p>}
-            {p.share_url ? (
-              <a
-                href={p.share_url}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-1 inline-block text-[10px] text-[var(--accent)] underline"
-              >
-                夸克下载
-                {p.share_extract_code ? `（提取码 ${p.share_extract_code}）` : ''}
-              </a>
-            ) : (
-              <p className="mt-1 text-[10px] text-[var(--muted)]">分享链接未配置</p>
-            )}
+            <AccelPackLinks pack={p} />
           </div>
         ))}
       </div>
@@ -294,7 +281,7 @@ export function QuarkAccelPanel() {
             ref={pathHintRef}
             value={localPath}
             onChange={(e) => setLocalPath(e.target.value)}
-            placeholder="粘贴 zip 完整路径…"
+            placeholder="粘贴 zip 或 .part1 完整路径…"
             className="min-w-[12rem] flex-1 rounded border border-[var(--border)] bg-[var(--panel)] px-2 py-1.5 text-xs"
           />
           <button
@@ -309,7 +296,9 @@ export function QuarkAccelPanel() {
       </div>
 
       <div className="space-y-1.5">
-        <p className="text-[10px] font-medium text-[var(--muted)]">拖入 / 选择 zip（浏览器上传）</p>
+        <p className="text-[10px] font-medium text-[var(--muted)]">
+          拖入仅适合小包；整包镜像（未分卷也一样）请用上方扫描/路径，网页上传易报 parsing the body
+        </p>
         <FileDropZone
           file={file}
           onFile={setFile}

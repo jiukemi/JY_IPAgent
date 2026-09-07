@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../api/client'
+import { AccelPackLinks } from './AccelPackLinks'
+import { DoubaoAssistPanel } from './DoubaoAssistPanel'
 import { FileDropZone } from './FileDropZone'
 import { AlertModal, parseApiError } from './AlertModal'
 
@@ -20,6 +22,8 @@ type WizardState = {
   recommended_pack?: {
     id: string
     name: string
+    download_url?: string
+    download_label?: string
     share_url?: string
     share_extract_code?: string
     zip_name?: string
@@ -27,6 +31,7 @@ type WizardState = {
     approx_size_gb?: number
     gpu_family?: string
   } | null
+  releases_url?: string
   share_root_url?: string
   share_extract_code?: string
   steps: WizardStep[]
@@ -638,6 +643,8 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
                     备用：尝试官网下载（国内常失败）
                   </button>
                 </div>
+                <DoubaoAssistPanel variant="docker" />
+                <DoubaoAssistPanel variant="full" />
               </div>
             )}
 
@@ -648,33 +655,25 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
                 <p className="text-[10px] leading-relaxed text-[var(--muted)]">
                   本机推荐：<strong className="text-[var(--text)]">{pack?.name || '对应显卡包'}</strong>
                   {pack?.approx_size_gb ? `（约 ${pack.approx_size_gb} GB）` : ''}
-                  。请用夸克下载后扫描 / 拖入，勿下错「通用 / RTX50」。
+                  。无外网用加速包：仓库分卷或夸克 → 扫描 / 按路径安装。有外网可跳过 zip，用下方豆包
+                  <code className="text-[var(--text)]"> docker pull</code>，再回本页检测并启动。勿下错「通用 /
+                  RTX50」。
                 </p>
-                {pack?.share_url ? (
-                  <a
-                    href={pack.share_url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-block text-[11px] font-medium text-[var(--accent)] underline"
-                  >
-                    打开本机推荐包的夸克分享
-                  </a>
-                ) : (
-                  <p className="text-[10px] text-amber-800 dark:text-amber-200">
-                    推荐包尚未填写 share_url。请让运营在 data/quark/catalog.json 填入夸克链接；或使用已下载的
-                    zip 拖入下方。
-                    {wiz.machine?.gpu_family === 'general' && wiz.general_pack_ops_note
-                      ? ` ${wiz.general_pack_ops_note}`
-                      : ''}
-                  </p>
-                )}
-                {(pack?.share_extract_code || wiz.share_extract_code) ? (
+                <DoubaoAssistPanel variant="pull" />
+                <AccelPackLinks
+                  pack={{
+                    download_url: pack?.download_url || wiz.releases_url,
+                    download_label: pack?.download_label || '打开仓库加速包页面',
+                    share_url: pack?.share_url,
+                    share_extract_code: pack?.share_extract_code || wiz.share_extract_code,
+                  }}
+                />
+                {(pack?.share_extract_code || wiz.share_extract_code) && pack?.share_url ? (
                   <p className="text-[10px] text-[var(--muted)]">
-                    提取码：
+                    夸克提取码：
                     <span className="font-mono text-[var(--text)]">
                       {pack?.share_extract_code || wiz.share_extract_code}
                     </span>
-                    （只下载本机推荐的那个 zip）
                   </p>
                 ) : null}
                 {wiz.share_root_url && (
@@ -684,7 +683,7 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
                     rel="noreferrer"
                     className="block text-[10px] text-[var(--muted)] underline"
                   >
-                    夸克总入口
+                    夸克总入口（备用）
                   </a>
                 )}
                 <label className="flex items-center gap-2 text-[10px] text-[var(--muted)]">
@@ -721,8 +720,8 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
                   file={file}
                   onFile={setFile}
                   accept=".zip,application/zip"
-                  emptyTitle="拖入加速包 zip"
-                  emptyHint="或点击选择 · 装好后校验 MANIFEST 与显卡"
+                  emptyTitle="拖入仅适合小包"
+                  emptyHint="整包镜像（未分卷也一样）请用上方扫描/路径，勿网页上传数 GB"
                   chooseLabel="选择 zip"
                 />
                 <button

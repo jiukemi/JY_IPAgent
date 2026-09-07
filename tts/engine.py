@@ -171,7 +171,11 @@ def run_edge_tts(text: str, output_mp3: Path, voice: str) -> Path:
 
 
 def convert_to_wav(ffmpeg: str, src: Path, dst: Path, sample_rate: int = 16000) -> Path:
-    subprocess.run(
+    src = Path(src)
+    dst = Path(dst)
+    if not src.is_file():
+        raise FileNotFoundError(f"参考音频不存在：{src}")
+    proc = subprocess.run(
         [
             ffmpeg,
             "-y",
@@ -179,16 +183,25 @@ def convert_to_wav(ffmpeg: str, src: Path, dst: Path, sample_rate: int = 16000) 
             "-loglevel",
             "error",
             "-i",
-            str(src),
+            str(src.resolve()),
+            "-vn",
             "-ac",
             "1",
             "-ar",
             str(sample_rate),
-            str(dst),
+            str(dst.resolve()),
         ],
-        check=True,
+        check=False,
         capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
     )
+    if proc.returncode != 0 or not dst.is_file() or dst.stat().st_size < 256:
+        err = ((proc.stderr or "") + "\n" + (proc.stdout or "")).strip()[-400:]
+        raise RuntimeError(
+            f"参考音转 wav 失败（退出码 {proc.returncode}）。请换 wav/mp3 重传克隆音色。\n{err}"
+        )
     return dst
 
 

@@ -1048,14 +1048,17 @@ export function TtsPage({
             </div>
           )}
           <p className="mb-2 text-xs text-[var(--muted)]">
-            预设音色与上方引擎一一对应，切换引擎后列表会自动刷新。
+            预设音色与上方引擎一一对应。IndexTTS2：标「准确」的方言（粤/东北/台/陕）走 Edge
+            可直接试听；普通话/英文及四川/上海需本机 examples 参考音——设置 → 本机环境重装
+            IndexTTS 补全后，再点「一键下载试听」。克隆请保存后点选该条再生成。
           </p>
           {system.length > 0 && previewStats && previewStats.missing > 0 && (
             <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--bg)] px-3 py-2 text-xs">
               <span className="text-[var(--muted)]">
                 试听缓存 {previewStats.cached}/{previewStats.total}
                 <span className="ml-1 text-amber-700 dark:text-amber-200">
-                  （{previewStats.missing} 个未生成）
+                  （{previewStats.missing} 个未生成
+                  {runtime?.preset_ready === false ? ' · 多半缺 IndexTTS examples' : ''}）
                 </span>
               </span>
               <button

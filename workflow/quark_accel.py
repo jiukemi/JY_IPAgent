@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import tempfile
 import zipfile
@@ -115,6 +116,115 @@ def _read_manifest_from_zip(zip_path: Path) -> dict | None:
         return None
 
 
+def _part_index(name: str) -> int | None:
+    """Parse *.part1 / *.part01 / *.zip.001 style suffixes."""
+    m = re.search(r"\.(?:part|PART)(\d+)$", name)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"\.zip\.(\d{3})$", name, re.I)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def _part_stem(path: Path) -> str:
+    name = path.name
+    m = re.search(r"\.(?:part|PART)\d+$", name)
+    if m:
+        return name[: m.start()]
+    m = re.search(r"\.zip\.\d{3}$", name, re.I)
+    if m:
+        return name[: m.start()] + ".zip"
+    return name
+
+
+def find_part_sets(scan_dirs: list[Path] | None = None) -> list[dict]:
+    """Find multi-part download sets (GitHub Release 分卷) newest-first."""
+    roots = scan_dirs or default_scan_dirs()
+    groups: dict[str, list[Path]] = {}
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            cands = list(root.glob("*.part*")) + list(root.glob("*.PART*"))
+            cands += list(root.glob("*.zip.[0-9][0-9][0-9]"))
+            cands += list(root.glob("*/*.part*")) + list(root.glob("*/*.zip.[0-9][0-9][0-9]"))
+        except OSError:
+            continue
+        for p in cands:
+            if not p.is_file() or _part_index(p.name) is None:
+                continue
+            stem = str((p.parent / _part_stem(p)).resolve())
+            groups.setdefault(stem, []).append(p)
+
+    out: list[dict] = []
+    for stem, parts in groups.items():
+        indexed = [(_part_index(p.name) or 0, p) for p in parts]
+        indexed.sort(key=lambda x: x[0])
+        if len(indexed) < 2:
+            continue
+        paths = [p for _, p in indexed]
+        try:
+            total = sum(p.stat().st_size for p in paths)
+            mtime = max(p.stat().st_mtime for p in paths)
+        except OSError:
+            total, mtime = 0, 0.0
+        out.append(
+            {
+                "path": str(paths[0].resolve()),
+                "parts": [str(p.resolve()) for p in paths],
+                "mtime": mtime,
+                "bytes": total,
+                "pack_id": "",
+                "gpu_family": "",
+                "bundle_name": Path(stem).name + ("（分卷）" if not Path(stem).name.endswith("分卷）") else ""),
+                "is_parts": True,
+            }
+        )
+    out.sort(key=lambda x: x.get("mtime") or 0, reverse=True)
+    return out
+
+
+def join_accel_parts(part_paths: list[str | Path], dest: Path | None = None) -> Path:
+    """Concatenate split parts into one zip. Returns output path."""
+    paths = [Path(p).expanduser().resolve() for p in part_paths]
+    if not paths:
+        raise ValueError("没有分卷文件")
+    for p in paths:
+        if not p.is_file():
+            raise FileNotFoundError(f"分卷缺失：{p}")
+    indexed = sorted(paths, key=lambda p: _part_index(p.name) or 0)
+    stem = _part_stem(indexed[0])
+    out_name = stem if stem.endswith(".zip") else stem + ".zip"
+    out = dest or (runtime_root() / "accel" / "joined" / out_name)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    if out.is_file():
+        out.unlink()
+    with out.open("wb") as w:
+        for p in indexed:
+            with p.open("rb") as r:
+                shutil.copyfileobj(r, w, length=1024 * 1024 * 8)
+    return out.resolve()
+
+
+def resolve_install_path(path: str | Path) -> Path:
+    """If path is a part file, join siblings first; else return as-is."""
+    p = Path(path).expanduser().resolve()
+    if p.is_file() and _part_index(p.name) is not None:
+        siblings: list[Path] = []
+        for cand in p.parent.iterdir():
+            if not cand.is_file():
+                continue
+            if _part_stem(cand) == _part_stem(p) and _part_index(cand.name) is not None:
+                siblings.append(cand)
+        if len(siblings) < 2:
+            raise ValueError(
+                f"只找到 {len(siblings)} 个分卷。请把同一加速包的全部 .partN 下到同一文件夹后再装。"
+            )
+        return join_accel_parts(siblings)
+    return p
+
+
 def find_accel_zips(scan_dirs: list[Path] | None = None) -> list[dict]:
     """Return candidate bundles newest-first."""
     roots = scan_dirs or default_scan_dirs()
@@ -129,7 +239,7 @@ def find_accel_zips(scan_dirs: list[Path] | None = None) -> list[dict]:
             continue
         for zp in zips:
             if not _looks_like_bundle_zip(zp):
-                if not any(k in zp.name.lower() for k in ("accel", "quark", "九易", "agent")):
+                if not any(k in zp.name.lower() for k in ("accel", "quark", "九易", "agent", "口播")):
                     continue
             manifest = _read_manifest_from_zip(zp)
             if not manifest:
@@ -150,8 +260,11 @@ def find_accel_zips(scan_dirs: list[Path] | None = None) -> list[dict]:
                     "gpu_family": (manifest.get("gpu_family") or GPU_FAMILY_ANY),
                     "pack_kind": manifest.get("pack_kind") or "universal",
                     "pack_id": manifest.get("pack_id") or "",
+                    "bundle_name": manifest.get("bundle_name") or zp.name,
+                    "is_parts": False,
                 }
             )
+    found.extend(find_part_sets(roots))
     found.sort(key=lambda x: x.get("mtime") or 0, reverse=True)
     return found
 
@@ -163,13 +276,16 @@ def install_accel_zip(
     force: bool = False,
 ) -> dict:
     """Verify MANIFEST parts and extract into runtime. Returns status dict."""
-    zp = Path(zip_path).expanduser().resolve()
+    try:
+        zp = resolve_install_path(zip_path)
+    except (ValueError, FileNotFoundError, OSError) as exc:
+        return {"ok": False, "message": str(exc)}
     if not zp.is_file():
         return {"ok": False, "message": f"文件不存在：{zp}"}
 
     manifest = _read_manifest_from_zip(zp)
     if not manifest:
-        return {"ok": False, "message": "不是有效的夸克加速包（缺少 MANIFEST.json / bundle_id）"}
+        return {"ok": False, "message": "不是有效的加速包（缺少 MANIFEST.json / bundle_id）"}
 
     machine = classify_gpu_family()
     pack_family = str(manifest.get("gpu_family") or GPU_FAMILY_ANY)
@@ -182,7 +298,7 @@ def install_accel_zip(
             "pack_gpu_family": pack_family,
             "machine_gpu_family": machine["gpu_family"],
             "machine": machine,
-            "hint": "请改下对应夸克包，或确认无误后勾选「强制安装」。",
+            "hint": "请改下对应加速包（通用 / RTX50），或确认无误后勾选「强制安装」。",
         }
 
     rt = dest_root or runtime_root()
@@ -320,7 +436,7 @@ def scan_and_install_latest(*, force: bool = False, prefer_gpu_match: bool = Tru
     if not cands:
         return {
             "ok": False,
-            "message": "未在「下载/桌面/夸克目录」找到加速包。请先用夸克或浏览器下载 zip（勿改关键名）。",
+            "message": "未在「下载/桌面」找到加速包。请从 GitHub Releases（分卷 .partN 请全下）或备用网盘下载到下载文件夹。",
             "scan_dirs": [str(p) for p in default_scan_dirs()],
         }
     machine = classify_gpu_family()
@@ -381,6 +497,7 @@ def catalog_for_ui() -> dict:
         "portal_note": catalog.get("quark_portal_note") or "",
         "share_root_url": catalog.get("share_root_url") or "",
         "share_extract_code": catalog.get("share_extract_code") or "",
+        "releases_url": catalog.get("releases_url") or "",
         "installed": installed,
         "scan_dirs": [str(p) for p in default_scan_dirs()],
         "schema_path": str(SCHEMA_PATH) if SCHEMA_PATH.is_file() else "",

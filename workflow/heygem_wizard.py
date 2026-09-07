@@ -1264,6 +1264,7 @@ def wizard_status() -> dict[str, Any]:
             "image_loaded": bool(st.get("image_loaded") or image_ok),
         },
         "recommended_pack": recommended,
+        "releases_url": catalog.get("releases_url") or "",
         "share_root_url": catalog.get("share_root_url") or "",
         "share_extract_code": (
             (recommended or {}).get("share_extract_code")

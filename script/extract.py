@@ -76,19 +76,85 @@ def extract_audio_for_asr(
     media_path: Path,
     wav_path: Path,
 ) -> None:
+    """Decode media → mono 16kHz wav for ASR. Surfaces real FFmpeg errors (not bare exit codes)."""
+    media_path = Path(media_path)
+    wav_path = Path(wav_path)
+    if not media_path.is_file():
+        raise FileNotFoundError(f"对标视频不存在：{media_path}")
+    size = media_path.stat().st_size
+    if size < 2048:
+        raise RuntimeError(
+            f"对标视频文件过小（{size} 字节），多半是 CDN 链接过期或下到了错误页，请换一条分享链接重试。"
+        )
+    # HTML / JSON error pages sometimes saved as .mp4
+    try:
+        head = media_path.read_bytes()[:64]
+    except OSError as exc:
+        raise RuntimeError(f"无法读取对标视频：{exc}") from exc
+    low = head.lstrip().lower()
+    if low.startswith((b"<!doctype", b"<html", b"{", b"[")) or b"<html" in low:
+        raise RuntimeError(
+            "对标视频实际是网页/JSON（不是有效 mp4）。链接可能已过期或需登录，请换链接或改用本机上传视频。"
+        )
+
     wav_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [
         ffmpeg_bin,
         "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
         "-i",
-        str(media_path),
+        str(media_path.resolve()),
+        "-vn",
+        "-map",
+        "0:a:0?",
         "-ac",
         "1",
         "-ar",
         "16000",
-        str(wav_path),
+        "-f",
+        "wav",
+        str(wav_path.resolve()),
     ]
-    subprocess.run(cmd, check=True)
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if proc.returncode == 0 and wav_path.is_file() and wav_path.stat().st_size > 256:
+        return
+
+    # Fallback: some broken muxers dislike -map; try simplest extract
+    cmd2 = [
+        ffmpeg_bin,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(media_path.resolve()),
+        "-vn",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        str(wav_path.resolve()),
+    ]
+    proc2 = subprocess.run(cmd2, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if proc2.returncode == 0 and wav_path.is_file() and wav_path.stat().st_size > 256:
+        return
+
+    err = ((proc2.stderr or proc.stderr or "") + "\n" + (proc2.stdout or "")).strip()[-600:]
+    code = proc2.returncode if proc2.returncode else proc.returncode
+    # Windows often shows unsigned wrap of -22 (EINVAL) as 4294967274
+    hint = ""
+    if code in (-22, 4294967274, 183) or "Invalid data" in err or "moov atom" in err:
+        hint = (
+            "\n常见原因：下载的 reference_from_cdn.mp4 损坏/不完整，或根本不是音视频。"
+            "请重新提取（换链接），或改用「本地上传视频」。"
+        )
+    raise RuntimeError(
+        f"FFmpeg 无法从对标视频抽出音频（退出码 {code}）。{hint}\n"
+        f"文件：{media_path}（{size} 字节）\n"
+        f"{err or '（无详细日志）'}"
+    )
 
 
 def whisper_python(cfg: dict) -> str:

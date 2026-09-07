@@ -423,8 +423,14 @@ def run_extract_stage(
         raise gr.Error(str(e)) from e
 
     except Exception as e:
+        from api.errors import format_subprocess_error, format_user_error
+        import subprocess as _sp
 
-        raise gr.Error(f"提取失败: {e}\n\n{traceback.format_exc()}") from e
+        if isinstance(e, _sp.CalledProcessError):
+            detail = format_subprocess_error(e)
+        else:
+            detail = format_user_error(str(e))
+        raise gr.Error(f"提取失败: {detail}") from e
 
 
 

@@ -434,14 +434,18 @@ def download_cdn_video(
         headers["Referer"] = ref
     req = urllib.request.Request(video_url, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
+        ctype = (resp.headers.get("Content-Type") or "").lower()
         total = int(resp.headers.get("Content-Length") or 0)
         chunk_size = 1024 * 256
         downloaded = 0
+        first = b""
         with dest.open("wb") as f:
             while True:
                 chunk = resp.read(chunk_size)
                 if not chunk:
                     break
+                if not first:
+                    first = chunk[:64]
                 f.write(chunk)
                 downloaded += len(chunk)
                 if total > 0 and on_progress:
@@ -450,6 +454,15 @@ def download_cdn_video(
     if dest.stat().st_size < 1024:
         dest.unlink(missing_ok=True)
         raise RuntimeError("CDN 下载失败或文件过小，链接可能已过期")
+    if "text/html" in ctype or "application/json" in ctype:
+        dest.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"CDN 返回的是网页/JSON（Content-Type={ctype}），不是视频。链接可能已过期，请换分享链接或本机上传。"
+        )
+    low = first.lstrip().lower()
+    if low.startswith((b"<!doctype", b"<html", b"{")):
+        dest.unlink(missing_ok=True)
+        raise RuntimeError("CDN 下载内容像是网页/错误页，不是视频。请换链接或本机上传。")
     return dest
 
 

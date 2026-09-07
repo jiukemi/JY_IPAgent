@@ -602,13 +602,13 @@ export function SettingsModal({
               </SettingsCard>
               <SettingsCard title="口播引擎安装向导" id="settings-heygem-wizard">
                 <p className="mb-2 text-xs text-[var(--muted)]">
-                  Docker → 夸克加速包（按显卡）→ 自动加载镜像并启动。安装包体积不含镜像。
+                  Docker → 仓库加速包（按显卡分卷）→ 自动加载镜像并启动。安装包体积不含镜像。
                 </p>
                 <HeyGemInstallWizard />
               </SettingsCard>
-              <SettingsCard title="网盘加速 · 夸克（免费线）" id="settings-quark">
+              <SettingsCard title="加速包下载 · 仓库优先" id="settings-quark">
                 <p className="mb-2 text-xs text-[var(--muted)]">
-                  无外网时用夸克下载大包。口播引擎按显卡分「通用 / RTX50」两包；通用组件与显卡无关。也可在上方向导中完成口播安装。
+                  大镜像优先从 GitHub Releases 分卷下载（单文件不能整包进代码仓库）。夸克链接易一次失效，仅作备用。口播按显卡分「通用 / RTX50」。也可在上方向导中完成安装。
                 </p>
                 <QuarkAccelPanel />
               </SettingsCard>

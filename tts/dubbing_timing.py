@@ -217,16 +217,61 @@ def _venv_python(cfg: dict, key: str) -> str:
     return venv_python(cfg, key)
 
 
+def _whisper_engine_dir(cfg: dict) -> Path:
+    from workflow.engine_dirs import resolve_engine_dir
+
+    return resolve_engine_dir(
+        cfg,
+        path_key="whisper_dir",
+        default_rel="tools/Whisper",
+        runtime_name="Whisper",
+        markers=("run_asr_timestamps.py", "run_asr.py"),
+    )
+
+
+def _bundled_timestamps_runner() -> Path:
+    return Path(__file__).resolve().parents[1] / "script" / "run_asr_timestamps.py"
+
+
+def _ensure_timestamps_runner(engine_dir: Path) -> Path | None:
+    """Prefer engine-local runner; else ship bundled script (packaged mini has no tools/)."""
+    local = engine_dir / "run_asr_timestamps.py"
+    if local.is_file():
+        return local
+    bundled = _bundled_timestamps_runner()
+    if bundled.is_file():
+        try:
+            engine_dir.mkdir(parents=True, exist_ok=True)
+            local.write_text(bundled.read_text(encoding="utf-8"), encoding="utf-8")
+            if local.is_file():
+                return local
+        except OSError:
+            return bundled
+        return bundled
+    return None
+
+
 def transcribe_dubbing_whisper(cfg: dict, audio_path: Path) -> list[dict]:
-    """ASR on dubbing audio with segment timestamps (faster-whisper)."""
+    """ASR on dubbing audio with segment timestamps (faster-whisper engine venv)."""
     audio_path = Path(audio_path)
     if not audio_path.is_file():
         return []
 
+    engine_dir = _whisper_engine_dir(cfg)
     py = _venv_python(cfg, "whisper_dir")
-    runner = Path(__file__).resolve().parents[1] / "tools" / "Whisper" / "run_asr_timestamps.py"
-    if py == sys.executable or not runner.is_file():
-        return _transcribe_dubbing_inline(cfg, audio_path)
+    runner = _ensure_timestamps_runner(engine_dir)
+
+    # No Whisper engine venv → cannot use app Python (mini pack has no faster-whisper).
+    if py == sys.executable or not runner:
+        inline = _transcribe_dubbing_inline(cfg, audio_path)
+        if inline:
+            return inline
+        raise RuntimeError(
+            "混剪「提取字幕」需要本机 Whisper（faster-whisper）。\n"
+            "迷你安装包不含该引擎：请打开「设置 → 本机环境」安装 Whisper 后重试"
+            "（仅装 FunASR 可提取文案，但第四步字幕时间轴目前走 Whisper）。\n"
+            f"引擎目录：{engine_dir}"
+        )
 
     model = (cfg.get("script") or {}).get("whisper_model", "small")
     lang = (cfg.get("script") or {}).get("language", "zh")
@@ -245,7 +290,14 @@ def transcribe_dubbing_whisper(cfg: dict, audio_path: Path) -> list[dict]:
     ]
     proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if proc.returncode != 0:
-        return _transcribe_dubbing_inline(cfg, audio_path)
+        err_tail = ((proc.stderr or "") + "\n" + (proc.stdout or "")).strip()[-800:]
+        inline = _transcribe_dubbing_inline(cfg, audio_path)
+        if inline:
+            return inline
+        raise RuntimeError(
+            "Whisper 字幕识别失败。请确认本机环境已安装 Whisper，网络可下载模型，且 FFmpeg 可用。\n"
+            + (err_tail or f"exit={proc.returncode}")
+        )
     try:
         if out_json.is_file():
             data = json.loads(out_json.read_text(encoding="utf-8"))
@@ -253,8 +305,8 @@ def transcribe_dubbing_whisper(cfg: dict, audio_path: Path) -> list[dict]:
             return data.get("segments") or []
         data = json.loads(proc.stdout.strip())
         return data.get("segments") or []
-    except (json.JSONDecodeError, OSError):
-        return []
+    except (json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError(f"Whisper 字幕结果解析失败：{exc}") from exc
 
 
 def _transcribe_dubbing_inline(cfg: dict, audio_path: Path) -> list[dict]:
@@ -378,7 +430,10 @@ def align_dubbing_from_audio(
 
     segments = transcribe_dubbing_whisper(cfg, audio)
     if not segments:
-        raise RuntimeError("配音语音识别失败，请确认 Whisper 已安装")
+        raise RuntimeError(
+            "配音语音识别未返回有效分段。请到「设置 → 本机环境」安装 Whisper 后重试；"
+            "并确认 FFmpeg 可用（设置里可装）。"
+        )
 
     duration = segments[-1]["end"] if segments else 0.0
     if probe_bin:

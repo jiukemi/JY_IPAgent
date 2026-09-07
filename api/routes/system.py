@@ -85,11 +85,29 @@ async def quark_upload(
     file: UploadFile = File(...),
     force: bool = Form(False),
 ) -> dict:
-    """Drag-drop / file picker: upload zip then install (browser has no local path)."""
+    """Drag-drop / file picker: small zip only. Large accel packs must use path/scan."""
+    from fastapi import HTTPException
+
     from workflow.quark_accel import save_upload_and_install
 
-    raw = await file.read()
-    return save_upload_and_install(raw, file.filename or "upload.zip", force=force)
+    # 浏览器 multipart 装 4GB+ 包极易 OOM / 「There was an error parsing the body」
+    max_upload = 400 * 1024 * 1024
+    raw = bytearray()
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        raw.extend(chunk)
+        if len(raw) > max_upload:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "整包镜像过大，请勿用网页「拖入上传」（与是否分卷无关）。\n"
+                    "请把已下载的 zip 放到「下载」文件夹后点「扫描安装」，"
+                    "或粘贴本机完整路径安装。"
+                ),
+            )
+    return save_upload_and_install(bytes(raw), file.filename or "upload.zip", force=force)
 
 
 @router.get("/tasks")

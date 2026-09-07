@@ -32,6 +32,14 @@ def format_user_error(message: str, *, engine: str | None = None) -> str:
             "请在「音色管理」删除后重新上传保存，再点「使用此音色」。"
         )
 
+    if "FFmpeg 无法从对标视频" in msg or "reference_from_cdn" in msg.lower():
+        return (
+            "文案提取 · 对标视频抽音频失败\n\n"
+            f"{msg}\n\n"
+            "处理：① 换一条未过期的分享链接再提取；② 或改用本机上传视频；"
+            "③ 确认设置里 FFmpeg 已装好。退出码 4294967274/-22 多半是下载文件损坏，不是 FFmpeg 本身坏了。"
+        )
+
     if "IndexTTS2 需要参考音频" in msg or msg.startswith("IndexTTS2 · 缺少参考音频"):
         if eng and eng not in ("indextts", ""):
             return (

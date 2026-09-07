@@ -1247,7 +1247,10 @@ def extract_publish_subtitles(
         manifest = ensure_subtitle_timing_manifest(cfg, session, probe_bin=probe, force=True)
     segs = (manifest or {}).get("segments") or []
     if not segs:
-        raise RuntimeError("语音识别未返回有效分段，请确认 Whisper / FunASR 已安装")
+        raise RuntimeError(
+            "语音识别未返回有效分段。混剪「一键提取字幕」需要本机 Whisper"
+            "（迷你包需在「设置 → 本机环境」安装；仅 FunASR 不够）。并确认 FFmpeg 可用。"
+        )
 
     media = video if video and video.is_file() else dub
     duration, _ = resolve_timing_duration(session, media, probe) if media else (

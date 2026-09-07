@@ -745,7 +745,10 @@ export const api = {
         pack_kind: string
         gpu_family: string
         approx_size_gb?: number
+        download_url?: string
+        download_label?: string
         share_url?: string
+        share_extract_code?: string
         zip_name?: string
         note?: string
         docker_image?: string
@@ -756,6 +759,7 @@ export const api = {
       portal_note?: string
       share_root_url?: string
       share_extract_code?: string
+      releases_url?: string
       installed?: Record<string, unknown> | null
       scan_dirs?: string[]
     }>('/api/system/quark/catalog'),
@@ -795,6 +799,14 @@ export const api = {
     }),
 
   quarkUpload: (file: File, force = false) => {
+    // 整包/分卷都数 GB：浏览器 multipart 常触发「There was an error parsing the body」
+    if (file.size > 400 * 1024 * 1024) {
+      return Promise.reject(
+        new Error(
+          '整包镜像过大，请勿网页拖入。请把已下载的 zip 放到「下载」后「扫描安装」，或粘贴本机路径安装。',
+        ),
+      )
+    }
     const fd = new FormData()
     fd.append('file', file)
     fd.append('force', force ? 'true' : 'false')
@@ -806,7 +818,15 @@ export const api = {
       installed?: string[]
       post_install_hint?: string
       runtime?: string
-    }>('/api/system/quark/upload', { method: 'POST', body: fd })
+    }>('/api/system/quark/upload', { method: 'POST', body: fd }).catch((e) => {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (/parsing the body|error parsing/i.test(msg)) {
+        throw new Error(
+          '上传解析失败（整包数 GB zip 很常见）。请改用「扫描安装」或粘贴本机 zip 路径，不要网页拖入。',
+        )
+      }
+      throw e
+    })
   },
 
   installEngineStream: async (

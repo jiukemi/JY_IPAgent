@@ -79,6 +79,66 @@ if __name__ == "__main__":
     main()
 '@ | Set-Content -Path $runner -Encoding UTF8
 
+$runnerTs = Join-Path $InstallDir "run_asr_timestamps.py"
+# Prefer copying from shipped app script (same tree as setup when developing from repo)
+$shippedTs = Join-Path $Root "script\run_asr_timestamps.py"
+if (Test-Path -LiteralPath $shippedTs) {
+  Copy-Item -LiteralPath $shippedTs -Destination $runnerTs -Force
+} else {
+@'
+"""faster-whisper CLI with segment timestamps for publish subtitle extract."""
+from __future__ import annotations
+import argparse, json, re
+from pathlib import Path
+
+def main() -> None:
+    p = argparse.ArgumentParser()
+    p.add_argument("--audio", required=True)
+    p.add_argument("--model", default="small")
+    p.add_argument("--language", default="zh")
+    p.add_argument("--out", default="")
+    args = p.parse_args()
+    from faster_whisper import WhisperModel
+    device, compute = "cpu", "int8"
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device, compute = "cuda", "float16"
+    except Exception:
+        pass
+    model = WhisperModel(args.model, device=device, compute_type=compute)
+    segments, _info = model.transcribe(
+        str(Path(args.audio).resolve()),
+        language=args.language or None,
+        vad_filter=True,
+        word_timestamps=True,
+    )
+    out = []
+    for i, seg in enumerate(segments):
+        text = re.sub(r"\s+", "", (seg.text or "").strip())
+        if not text:
+            continue
+        words_out = []
+        for w in seg.words or []:
+            wtext = re.sub(r"\s+", "", (getattr(w, "word", None) or "").strip())
+            if not wtext:
+                continue
+            words_out.append({"word": wtext, "start": round(float(w.start), 3), "end": round(float(w.end), 3)})
+        item = {"index": i + 1, "start": round(float(seg.start), 3), "end": round(float(seg.end), 3), "text": text}
+        if words_out:
+            item["words"] = words_out
+        out.append(item)
+    payload = {"segments": out}
+    raw = json.dumps(payload, ensure_ascii=False)
+    if args.out:
+        Path(args.out).write_text(raw, encoding="utf-8")
+    print(raw)
+
+if __name__ == "__main__":
+    main()
+'@ | Set-Content -Path $runnerTs -Encoding UTF8
+}
+
 & $py -c "import faster_whisper; print('WHISPER_OK')"
 if ($LASTEXITCODE -ne 0) { throw "Whisper verify failed" }
 

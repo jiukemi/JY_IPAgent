@@ -265,12 +265,23 @@ def _process_one(session_path: str, job_id: str) -> None:
         log.exception("job %s failed", job_id)
         finished = _utc_now()
         started = (get_job(session, job_id) or {}).get("started_at")
+        err_text = str(exc)
+        try:
+            from api.errors import format_subprocess_error, format_user_error
+            import subprocess as _sp
+
+            if isinstance(exc, _sp.CalledProcessError):
+                err_text = format_subprocess_error(exc)
+            else:
+                err_text = format_user_error(err_text)
+        except Exception:
+            pass
         update_job(
             session,
             job_id,
             status="failed",
-            message=str(exc),
-            error=str(exc),
+            message=err_text,
+            error=err_text,
             finished_at=finished,
             duration_sec=_elapsed_sec(started, finished),
         )

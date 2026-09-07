@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import type { JobRecord } from '../api/client'
+import { FEEDBACK_EMAIL, FEEDBACK_MAILTO } from '../brand'
 import { useJobQueue } from '../context/JobQueueContext'
 
 function statusLabel(s: string) {
@@ -63,6 +64,51 @@ function formatClock(iso: string | null | undefined): string | null {
   } catch {
     return iso
   }
+}
+
+function buildJobFeedbackText(job: JobRecord): string {
+  const lines = [
+    '【九易AI智能体 · 任务中心报错】',
+    `类型：${typeLabel(job.type)} (${job.type})`,
+    `标题：${job.title || ''}`,
+    `状态：${job.status}`,
+    job.message ? `消息：${job.message}` : '',
+    job.error ? `错误：\n${job.error}` : '',
+    job.created_at ? `创建：${formatClock(job.created_at) || job.created_at}` : '',
+    job.finished_at ? `结束：${formatClock(job.finished_at) || job.finished_at}` : '',
+  ]
+  const log = job.result && typeof job.result.log === 'string' ? job.result.log.trim() : ''
+  if (log) lines.push(`日志（末尾）：\n${log.slice(-2000)}`)
+  lines.push('', `反馈邮箱：${FEEDBACK_EMAIL}`)
+  return lines.filter((x) => x !== '').join('\n')
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.position = 'fixed'
+      ta.style.left = '-9999px'
+      document.body.appendChild(ta)
+      ta.select()
+      const ok = document.execCommand('copy')
+      document.body.removeChild(ta)
+      return ok
+    } catch {
+      return false
+    }
+  }
+}
+
+function openFeedbackMail(job: JobRecord) {
+  const body = buildJobFeedbackText(job)
+  const subject = encodeURIComponent(`[九易反馈] ${typeLabel(job.type)} · ${job.title || '任务失败'}`)
+  const href = `${FEEDBACK_MAILTO}?subject=${subject}&body=${encodeURIComponent(body.slice(0, 1800))}`
+  window.location.href = href
 }
 
 function jobModel(job: JobRecord): string | null {
@@ -151,6 +197,7 @@ function JobRow({
 }) {
   const [open, setOpen] = useState(false)
   const [confirmPurge, setConfirmPurge] = useState(false)
+  const [copyHint, setCopyHint] = useState('')
   const pct = Math.round(Math.max(0, Math.min(1, job.progress || 0)) * 100)
   const active = job.status === 'queued' || job.status === 'running'
   const pri = Number(job.priority || 0)
@@ -282,9 +329,36 @@ function JobRow({
         </div>
       )}
       {job.error && job.status === 'failed' && (
-        <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-all text-xs text-red-600">
-          {job.error}
-        </pre>
+        <div className="mt-2 space-y-1.5">
+          <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-all text-xs text-red-600">
+            {job.error}
+          </pre>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                void copyText(buildJobFeedbackText(job)).then((ok) => {
+                  setCopyHint(ok ? '已复制报错' : '复制失败，请手动选中上方文字')
+                  window.setTimeout(() => setCopyHint(''), 2000)
+                })
+              }}
+              className="rounded border border-[var(--border)] px-2 py-0.5 text-[11px] text-[var(--text)] hover:bg-[var(--panel)]"
+            >
+              一键复制报错
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                void copyText(buildJobFeedbackText(job)).then(() => openFeedbackMail(job))
+              }}
+              className="rounded border border-[var(--accent)]/40 px-2 py-0.5 text-[11px] text-[var(--accent)] hover:bg-[var(--accent)]/10"
+              title={`将打开邮件草稿发往 ${FEEDBACK_EMAIL}`}
+            >
+              复制并邮件反馈
+            </button>
+            {copyHint ? <span className="text-[10px] text-[var(--muted)]">{copyHint}</span> : null}
+          </div>
+        </div>
       )}
       {canExpand && (
         <div className="mt-2">
