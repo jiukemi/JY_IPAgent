@@ -134,6 +134,7 @@ export type UpdateCheckResult = {
   update_available: boolean
   latest: UpdateRelease | null
   mirrors: UpdateRelease[]
+  all_mirrors?: UpdateRelease[]
 }
 
 export const api = {

@@ -95,6 +95,7 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
     message: string
     variant: 'error' | 'success' | 'info' | 'warning'
   } | null>(null)
+  const [loadElapsedSec, setLoadElapsedSec] = useState(0)
 
   const refresh = useCallback(async () => {
     setProbeLoading(true)
@@ -140,6 +141,16 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
     const id = window.setInterval(() => void refresh(), 2000)
     return () => window.clearInterval(id)
   }, [open, dockerInstalling, refresh])
+
+  useEffect(() => {
+    if (busy !== '加载镜像') {
+      setLoadElapsedSec(0)
+      return
+    }
+    setLoadElapsedSec(0)
+    const id = window.setInterval(() => setLoadElapsedSec((s) => s + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [busy])
 
   const push = (line: string) => setLog((prev) => [...prev.slice(-50), line])
 
@@ -739,11 +750,11 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
             {wiz.steps[2]?.done && !ready && (
               <div className="mt-3 space-y-2 rounded-lg border border-[var(--border)] p-2.5">
                 <p className="text-[11px] font-medium text-[var(--text)]">④ 加载镜像并启动</p>
-                <p className="text-[10px] text-[var(--muted)]">
+                <p className="text-[10px] leading-relaxed text-[var(--muted)]">
                   {wiz.image_loaded
                     ? '本地已有对应 Docker 镜像，可直接启动。'
                     : wiz.tars?.length
-                      ? `将加载：${wiz.tars.map((t) => t.name).join('、')}`
+                      ? `将加载：${wiz.tars.map((t) => t.name).join('、')}。通用包 docker load 大约 5～15 分钟，无百分比进度；失败会弹窗报错（不会无限挂死，最长约 1 小时超时）。可看 Docker Desktop → Images 是否在变大。`
                       : '未找到 tar，请回到上一步安装加速包。'}
                 </p>
                 <div className="flex flex-wrap gap-2">
@@ -754,7 +765,9 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
                       onClick={() => void loadImage()}
                       className="rounded-lg border border-[var(--border)] px-3 py-1.5 text-xs disabled:opacity-40"
                     >
-                      加载镜像（docker load）
+                      {busy === '加载镜像'
+                        ? `加载中… ${Math.floor(loadElapsedSec / 60)}:${String(loadElapsedSec % 60).padStart(2, '0')}`
+                        : '加载镜像（docker load）'}
                     </button>
                   )}
                   <button
@@ -783,7 +796,14 @@ export function HeyGemInstallWizard({ onReadyChange, compact }: Props) {
               </p>
             )}
 
-            {busy && <p className="mt-2 text-[10px] text-[var(--muted)]">进行中：{busy}…</p>}
+            {busy && (
+              <p className="mt-2 text-[10px] text-[var(--muted)]">
+                进行中：{busy}
+                {busy === '加载镜像'
+                  ? `（已 ${Math.floor(loadElapsedSec / 60)} 分 ${loadElapsedSec % 60} 秒 · 无百分比属正常，请勿反复点击）`
+                  : '…'}
+              </p>
+            )}
             {log.length > 0 && (
               <pre className="mt-2 max-h-28 overflow-auto rounded-lg bg-[var(--panel)] p-2 text-[10px] text-[var(--muted)]">
                 {log.join('\n')}

@@ -86,6 +86,29 @@ export const FAQ_ITEMS: FaqItem[] = [
   },
   // —— 底部补充（用户高频） ——
   {
+    id: 'update-still-old',
+    q: '应用内更新到新版，装完还是旧版本（如 0.1.30）？',
+    a:
+      '常见原因：点了「Gitee 下载」但 Gitee Release 还停在旧版，等于又装回旧安装包。\n'
+      + '处理：检查更新时选带最新版本号的按钮（优先 GitHub）；或到 GitHub Releases 手动下 JY_IPAgent-Setup-新版本.exe 覆盖安装。装完看设置/关于里的版本号确认。\n'
+      + '克隆音色 / 部分试听不全：请先确认已真正升到 0.1.31+；克隆需保存后点选该条；普通话等预设试听需 IndexTTS examples（本机环境重装 IndexTTS）。',
+  },
+  {
+    id: 'heygem-param-json',
+    q: '升级到 0.1.32 后口播报 param.json /code/data/result 找不到？',
+    a:
+      '与 Whisper 字幕修复无关。多半是升级/重装加速包后，旧 Docker 容器仍挂着旧数据目录，容器写不了 result。\n'
+      + '处理：设置 → 口播引擎安装向导 →「一键启动口播引擎」（会强制重建并挂当前目录）；或 Docker Desktop 删除容器 duix-avatar-gen-video 后再启动。确认引擎就绪后再生成口播。',
+  },
+  {
+    id: 'heygem-docker-load',
+    q: '口播向导④「加载镜像」会报错吗？会一直卡着吗？有进度吗？',
+    a:
+      '会报错：Docker 未开、缺 tar、磁盘满、load 失败都会弹窗。\n'
+      + '不会无限挂死：后端 docker load 最长约 1 小时超时；通用包正常约 5～15 分钟。\n'
+      + '没有百分比进度（docker load 本身几乎不报进度），界面会显示已用时间。可看 Docker Desktop → Images 是否在变大；磁盘忙则多半仍在加载。超过约 30 分钟完全无动静再重试/查空间。',
+  },
+  {
     id: 'indextts-preview-clone',
     q: 'IndexTTS2：14 个音色只有粤/东北/台/陕能试听，克隆配音失败？',
     a:

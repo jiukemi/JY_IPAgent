@@ -55,8 +55,9 @@ def host_mount(cfg: dict) -> Path:
             from avatar.heygem_runtime import resolve_heygem_data_mount
 
             return resolve_heygem_data_mount()
-        p.mkdir(parents=True, exist_ok=True)
-        return p
+        from avatar.heygem_runtime import ensure_heygem_data_layout
+
+        return ensure_heygem_data_layout(p)
     from avatar.heygem_runtime import resolve_heygem_data_mount
 
     return resolve_heygem_data_mount()
@@ -385,6 +386,13 @@ def poll_video_task(
             continue
 
         if _is_failed(status, msg, api_code):
+            if "param.json" in msg or "/code/data/result" in msg:
+                raise RuntimeError(
+                    "HeyGem 合成失败：容器写不了 /code/data/result（常见于升级后 Docker 挂载目录与软件不一致）。\n"
+                    "请到「口播引擎安装向导」点「一键启动口播引擎」重建容器（会强制按当前数据目录挂载），"
+                    "确认 Docker Desktop 已运行后再生成。\n"
+                    f"详情: {raw}"
+                )
             raise RuntimeError(f"HeyGem 合成失败: {raw}")
 
         if _is_done(status, result_path):

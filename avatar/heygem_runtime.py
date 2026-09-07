@@ -139,8 +139,41 @@ def resolve_heygem_data_mount() -> Path:
         mount = None
     if mount is None:
         mount = _runtime_root() / "heygem_face2face"
-    mount.mkdir(parents=True, exist_ok=True)
+    ensure_heygem_data_layout(mount)
     return mount
+
+
+def ensure_heygem_data_layout(mount: Path | None = None) -> Path:
+    """Create host dirs the Duix container expects under /code/data (result/temp/…)."""
+    root = Path(mount) if mount is not None else resolve_heygem_data_mount()
+    root.mkdir(parents=True, exist_ok=True)
+    for sub in ("result", "temp", "tasks", "model"):
+        (root / sub).mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _persist_data_mount_host(mount: Path) -> None:
+    """Keep config.yaml heygem.data_mount_host in sync with the compose volume."""
+    try:
+        import yaml
+
+        from workflow.app_config import CONFIG_PATH, load_cfg, repair_yaml_windows_path_quotes
+
+        cfg = load_cfg()
+        heygem = dict(cfg.get("heygem") or {})
+        abs_mount = str(mount.resolve()).replace("\\", "/")
+        cur = str(heygem.get("data_mount_host") or "").strip().replace("\\", "/").rstrip("/")
+        if cur.lower() == abs_mount.lower().rstrip("/"):
+            return
+        heygem["data_mount_host"] = abs_mount
+        heygem.setdefault("data_mount_container", "/code/data")
+        cfg["heygem"] = heygem
+        text = yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False)
+        text = repair_yaml_windows_path_quotes(text)
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.write_text(text, encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _mount_for_compose(mount: Path) -> str:
@@ -159,6 +192,8 @@ def ensure_heygem_docker_compose(image: str | None = None) -> Path | None:
     if not img:
         return None
     mount = resolve_heygem_data_mount()
+    ensure_heygem_data_layout(mount)
+    _persist_data_mount_host(mount)
     deploy = _runtime_root() / "heygem" / "deploy"
     deploy.mkdir(parents=True, exist_ok=True)
     compose = deploy / "docker-compose.yml"
@@ -373,6 +408,7 @@ def start_heygem_stream_lines() -> list[str]:
         if img:
             compose = ensure_heygem_docker_compose(img)
             if compose and compose.is_file():
+                # Always recreate so volume matches current data_mount (升级后旧容器挂错盘会报 param.json)
                 return [
                     "docker",
                     "compose",
@@ -380,6 +416,7 @@ def start_heygem_stream_lines() -> list[str]:
                     str(compose),
                     "up",
                     "-d",
+                    "--force-recreate",
                     "--remove-orphans",
                 ]
         script_docker = ROOT / "scripts" / "setup" / "start_heygem_docker.ps1"

@@ -107,6 +107,11 @@ export function UpdateModal({ autoCheck = true, forceOpen = false, onClose }: Pr
               · 最新 <span className="font-medium text-[var(--accent)]">{latest.version}</span>
             </>
           ) : null}
+          {info?.update_available ? (
+            <span className="mt-1 block text-[11px] text-amber-700 dark:text-amber-200">
+              请点带版本号的按钮（推荐最新）。勿选更旧的镜像源，否则装完仍是旧版。
+            </span>
+          ) : null}
           {info && !info.update_available && !error ? (
             <span className="mt-1 block text-emerald-500">已是最新版本</span>
           ) : null}
@@ -132,17 +137,29 @@ export function UpdateModal({ autoCheck = true, forceOpen = false, onClose }: Pr
         ) : null}
         <div className="mt-4 flex flex-wrap gap-2">
           {info?.update_available &&
-            mirrors.map((m) => (
+            mirrors.map((m, idx) => (
               <button
-                key={m.source}
+                key={`${m.source}-${m.version}`}
                 type="button"
                 disabled={busy || !m.download_url}
                 onClick={() => void download(m)}
-                className="rounded-lg bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50"
+                className={
+                  idx === 0
+                    ? 'rounded-lg bg-[var(--accent)] px-3 py-2 text-xs font-semibold text-white disabled:opacity-50'
+                    : 'rounded-lg border border-[var(--border)] px-3 py-2 text-xs font-semibold text-[var(--text)] disabled:opacity-50'
+                }
+                title={m.download_url}
               >
-                {m.source === 'gitee' ? 'Gitee 下载更新' : 'GitHub 下载更新'}
+                {m.source === 'gitee' ? 'Gitee' : 'GitHub'} 下载 {m.version}
+                {idx === 0 ? '（推荐）' : ''}
               </button>
             ))}
+          {info?.update_available && mirrors.length === 0 ? (
+            <p className="w-full text-[11px] text-amber-700 dark:text-amber-200">
+              已检测到新版本，但可用下载源未返回高于当前版本的安装包。请到 GitHub Releases 手动下载
+              JY_IPAgent-Setup-*.exe。
+            </p>
+          ) : null}
           <button
             type="button"
             disabled={busy}

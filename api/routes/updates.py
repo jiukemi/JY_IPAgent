@@ -164,10 +164,15 @@ def check_updates() -> dict:
             newest = m
 
     update_available = bool(newest and is_newer(newest["version"], local))
+    # Only offer installers that are actually newer than the running app
+    # (Gitee often lags GitHub — clicking an old Gitee mirror reinstalls e.g. 0.1.30).
+    usable = [m for m in mirrors if is_newer(m["version"], local)]
+    usable.sort(key=lambda m: _parse_semver(m["version"]), reverse=True)
     return {
         "ok": True,
         "current_version": local,
         "update_available": update_available,
-        "latest": newest,
-        "mirrors": mirrors,
+        "latest": newest if update_available else newest,
+        "mirrors": usable if update_available else mirrors,
+        "all_mirrors": mirrors,
     }

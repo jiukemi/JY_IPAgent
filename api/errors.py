@@ -71,6 +71,16 @@ def format_user_error(message: str, *, engine: str | None = None) -> str:
     ):
         return f"音色与引擎不匹配\n\n{msg}"
 
+    if "param.json" in msg or "/code/data/result" in msg:
+        return (
+            "HeyGem 数字人 · 数据目录挂载异常\n\n"
+            "容器找不到 /code/data/result/param.json。多半是升级后仍在用旧容器挂载，"
+            "或挂载目录与配置不一致（与 0.1.32 字幕修复无关）。\n\n"
+            "处理：① 打开「设置 → 口播引擎安装向导」→「一键启动口播引擎」（会强制重建容器）；"
+            "② 等 8383 就绪后再生成口播；③ 仍失败则 Docker Desktop 里删掉容器 duix-avatar-gen-video 后再启动。\n\n"
+            f"{msg}"
+        )
+
     if "HeyGem" in msg or "任务不存在" in msg or "data_mount" in msg:
         return f"HeyGem 数字人\n\n{msg}"
 
