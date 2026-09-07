@@ -70,6 +70,8 @@ def _indextts_status(cfg: dict) -> dict:
     missing: list[str] = []
     if not _venv_ok(cfg, "indextts_dir"):
         missing.append("Python 虚拟环境未安装")
+    if not (install / "indextts" / "infer_v2.py").is_file():
+        missing.append("IndexTTS 源码包缺失（indextts/），请重装 IndexTTS2，勿只装权重加速包")
     if not (model_dir / "config.yaml").is_file():
         missing.append("模型权重 checkpoints（需运行 scripts/setup/setup_indextts.ps1）")
     else:
@@ -91,6 +93,7 @@ def _indextts_status(cfg: dict) -> dict:
         )
     installed = (
         _venv_ok(cfg, "indextts_dir")
+        and (install / "indextts" / "infer_v2.py").is_file()
         and (model_dir / "config.yaml").is_file()
         and core_checkpoints_ready(model_dir)
         and qwen_emo_ready(model_dir)

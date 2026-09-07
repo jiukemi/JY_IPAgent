@@ -286,6 +286,20 @@ if (Test-Path $venvPy) {
     if ($LASTEXITCODE -ne 0) {
         & $venvPy -m pip install -q pyyaml -i "https://mirrors.aliyun.com/pypi/simple" --trusted-host mirrors.aliyun.com
     }
+    Write-Host "==> verify import indextts"
+    & $venvPy -c "import indextts; print('indextts OK', indextts.__file__)"
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "==> import failed — editable install from source"
+        & uv pip install --python $venvPy -e $InstallDir -i "https://mirrors.aliyun.com/pypi/simple"
+        if ($LASTEXITCODE -ne 0) {
+            & $venvPy -m pip install -e $InstallDir -i "https://mirrors.aliyun.com/pypi/simple" --trusted-host mirrors.aliyun.com
+        }
+        $env:PYTHONPATH = $InstallDir
+        & $venvPy -c "import indextts; print('indextts OK', indextts.__file__)"
+        if ($LASTEXITCODE -ne 0) {
+            throw "IndexTTS 包无法 import（No module named indextts）。请检查 $InstallDir\indextts 与 uv sync。"
+        }
+    }
 }
 
 Write-Host "==> Download IndexTTS-2 checkpoints (large, may take a while)..."

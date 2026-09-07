@@ -78,6 +78,13 @@ export const FAQ_ITEMS: FaqItem[] = [
       + '处理：升到 0.1.38+（首次合成会自动 pip 安装）；或设置 → 本机环境 → 重装 IndexTTS2。',
   },
   {
+    id: 'indextts-no-module',
+    q: '配音报 No module named indextts？',
+    a:
+      'IndexTTS 源码包没进 Python 路径，或只下了权重、没完成 uv sync。\n'
+      + '处理：① 升到 0.1.39+；② 设置 → 本机环境 → 重装 IndexTTS2（等源码同步与依赖装完）；③ 权重加速包不能替代完整安装。',
+  },
+  {
     id: 'whisper-hub-timeout',
     q: '混剪一键提取字幕报 ConnectTimeout / LocalEntryNotFoundError？',
     a:

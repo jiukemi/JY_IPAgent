@@ -57,15 +57,17 @@ def shutdown_indextts_worker() -> None:
 
 
 def _start_worker(cfg: dict) -> subprocess.Popen:
-    from tts.engine import active_config_path
+    from tts.engine import active_config_path, indextts_subprocess_env
 
     py = venv_python(cfg, "indextts_dir")
+    install, env = indextts_subprocess_env(cfg)
     worker_script = Path(__file__).resolve().parent / "indextts_worker.py"
     config_path = active_config_path(cfg)
     cmd = [py, "-u", str(worker_script), "--config", str(config_path), "--stdio"]
     proc = subprocess.Popen(
         cmd,
-        cwd=str(Path.cwd()),
+        cwd=str(install if install.is_dir() else Path.cwd()),
+        env=env,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,

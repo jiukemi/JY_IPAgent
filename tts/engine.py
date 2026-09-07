@@ -50,7 +50,13 @@ def venv_python(cfg: dict, key: str) -> str:
         except Exception:
             if not root.is_absolute():
                 root = Path(root)
-    elif key in ("piper_dir", "qwen3_local_dir", "whisper_dir", "indextts_dir"):
+    elif key == "indextts_dir":
+        try:
+            root = resolve_indextts_install_dir(cfg)
+        except Exception:
+            if not root.is_absolute():
+                root = Path(root)
+    elif key in ("piper_dir", "qwen3_local_dir", "whisper_dir"):
         try:
             from workflow.engine_dirs import resolve_engine_dir
 
@@ -58,7 +64,6 @@ def venv_python(cfg: dict, key: str) -> str:
                 "piper_dir": ("tools/Piper", "Piper", ("zh_CN-huayan-medium.onnx",)),
                 "qwen3_local_dir": ("tools/Qwen3-TTS", "Qwen3-TTS", ("models",)),
                 "whisper_dir": ("tools/Whisper", "Whisper", ("run_asr.py",)),
-                "indextts_dir": ("tools/IndexTTS", "IndexTTS", ("checkpoints/config.yaml", "pyproject.toml")),
             }
             default_rel, runtime_name, markers = mapping[key]
             root = resolve_engine_dir(
@@ -253,14 +258,15 @@ def resolve_indextts_install_dir(cfg: dict) -> Path:
         try:
             if (p / "checkpoints" / "config.yaml").is_file():
                 s += 10
+            # Prefer installs that can actually `import indextts` (source tree or editable).
+            if (p / "indextts" / "infer_v2.py").is_file():
+                s += 8
             if (p / ".venv" / "Scripts" / "python.exe").is_file() or (
                 p / "venv" / "Scripts" / "python.exe"
             ).is_file():
                 s += 2
             if (p / "pyproject.toml").is_file() or (p / "indextts").is_dir():
                 s += 1
-            if p.is_dir():
-                s += 0
         except OSError:
             return -1
         return s
@@ -369,6 +375,19 @@ def resolve_indextts_reference(
     )
 
 
+def indextts_subprocess_env(cfg: dict) -> tuple[Path, dict[str, str]]:
+    """Env + install dir for IndexTTS subprocess/worker (PYTHONPATH must include install root)."""
+    install = resolve_indextts_install_dir(cfg)
+    env = _hf_env(cfg)
+    agent_root = str(project_root())
+    path_parts = [str(install.resolve()), agent_root]
+    existing = env.get("PYTHONPATH", "")
+    env["PYTHONPATH"] = os.pathsep.join(
+        [p for p in path_parts if Path(p).is_dir()] + ([existing] if existing else [])
+    )
+    return install, env
+
+
 def _indextts_subprocess(
     cfg: dict,
     text: str,
@@ -401,6 +420,7 @@ def _indextts_subprocess(
         return
 
     py = venv_python(cfg, "indextts_dir")
+    install, env = indextts_subprocess_env(cfg)
     cmd = [
         py,
         str(Path(__file__).resolve().parent / "run_indextts.py"),
@@ -421,7 +441,15 @@ def _indextts_subprocess(
     ]
     if reference_wav:
         cmd.extend(["--reference", reference_wav])
-    _run_backend_subprocess(cfg, cmd, on_progress=on_progress, progress_text=text)
+    run_cmd_with_progress(
+        cmd,
+        cwd=install if install.is_dir() else Path.cwd(),
+        env=env,
+        on_progress=on_progress,
+        span=(0.15, 0.88),
+        progress_text=text,
+        fake_creep=True,
+    )
 
 
 def _cosyvoice_subprocess(

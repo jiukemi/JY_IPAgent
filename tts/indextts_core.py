@@ -240,7 +240,37 @@ def prepare_indextts_cfg(cfg_path: Path, model_dir: Path) -> Path:
         return out
 
 
+def ensure_indextts_importable(cfg: dict) -> Path:
+    """Put IndexTTS install root on sys.path (official docs often require PYTHONPATH=.)."""
+    import sys
+
+    from tts.engine import resolve_indextts_install_dir
+
+    install = resolve_indextts_install_dir(cfg)
+    try:
+        install_s = str(install.resolve())
+    except OSError:
+        install_s = str(install)
+    if install_s not in sys.path:
+        sys.path.insert(0, install_s)
+
+    try:
+        import indextts  # noqa: F401
+    except ImportError as exc:
+        pkg = install / "indextts" / "infer_v2.py"
+        raise ModuleNotFoundError(
+            "IndexTTS2 包不可用（No module named 'indextts'）。\n"
+            f"安装目录: {install}\n"
+            f"源码 infer_v2: {'有' if pkg.is_file() else '无'}\n"
+            "请到「设置 → 本机环境」重装 IndexTTS2（需完成源码同步与 uv sync）。\n"
+            "若只用了权重加速包，仍须完整安装 IndexTTS2 才能配音。\n"
+            f"详情: {exc}"
+        ) from exc
+    return install
+
+
 def create_index_tts2(cfg: dict):
+    ensure_indextts_importable(cfg)
     from indextts.infer_v2 import IndexTTS2
 
     it_cfg = cfg.get("indextts", {})
