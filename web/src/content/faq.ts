@@ -84,6 +84,21 @@ export const FAQ_ITEMS: FaqItem[] = [
     a:
       '先确认网络，有条件可开梯子后重试。未安装 Git 时，IndexTTS / CosyVoice / SadTalker 会改用 ZIP 下载源码，一般仍可装；口播主路径走 Docker/夸克，不必强依赖 Git。旧电脑报 FFmpeg/Python 找不到或 _repo_fetch 解析错误时，请升到 0.1.30+。整合包尚在准备中。急用可联系群主。失败时请用下方「一键反馈」附上诊断包。',
   },
+  {
+    id: 'funasr-numpy-build',
+    q: '本机推荐安装 FunASR 报错 Unknown compiler / vswhere / numpy 编译失败？',
+    a:
+      '不是要你装 Visual Studio。旧版可能用了系统/豆包沙箱 Python，没有现成 numpy 轮子就去源码编译，才找 cl/gcc。\n'
+      + '处理：① 升到 0.1.34+ 后重试「本机环境 → FunASR」；② 若仍失败，启动页「清除运行时并重试」再用便携 Python 重装；③ 口播另需先打开 Docker Desktop，再跑 HeyGem 向导。',
+  },
+  {
+    id: 'boot-pending-lock',
+    q: '下载/装引擎中途关掉后，再开软件起不来、像登录不了？',
+    a:
+      '旧版在恢复排队任务时可能死锁，后端起不来。0.1.34+ 已修复。\n'
+      + '临时自救：完全退出软件后，删除运行时目录下的 data\\job_worker_pending.json（或 JY_IPAgent-Data\\runtime 旁的 data），再启动；中断的引擎安装可在设置里重新点安装。\n'
+      + '勿用豆包沙箱当「系统 Python」；装坏空环境时用「清除运行时并重试」恢复便携 Python。',
+  },
   // —— 底部补充（用户高频） ——
   {
     id: 'update-still-old',

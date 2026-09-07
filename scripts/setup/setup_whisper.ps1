@@ -33,16 +33,46 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
   }
 }
 
-if (-not (Test-Path ".venv")) {
-  uv venv .venv
+# Prefer app runtime Python so uv does not pick Doubao/sandbox interpreters
+# that force source builds (no MSVC on most PCs).
+$rt = ($env:AGENT_RUNTIME_DIR -as [string]).Trim()
+$basePy = $null
+if ($rt) {
+  foreach ($cand in @(
+      (Join-Path $rt "venv\Scripts\python.exe"),
+      (Join-Path $rt "python\python.exe")
+    )) {
+    if (Test-Path $cand) { $basePy = $cand; break }
+  }
+}
+
+function Test-WhisperVenvOk {
+  $pyExe = Join-Path $InstallDir ".venv\Scripts\python.exe"
+  if (-not (Test-Path $pyExe)) { return $false }
+  & $pyExe -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<=(3,12) else 1)"
+  return ($LASTEXITCODE -eq 0)
+}
+
+if (-not (Test-WhisperVenvOk)) {
+  if (Test-Path ".venv") {
+    Write-Host "==> remove incompatible Whisper .venv"
+    Remove-Item ".venv" -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  if ($basePy) {
+    Write-Host "==> uv venv --python $basePy"
+    uv venv .venv --python $basePy
+  } else {
+    Write-Host "==> uv venv --python 3.11"
+    uv venv .venv --python 3.11
+  }
   if ($LASTEXITCODE -ne 0) { throw "uv venv failed exit=$LASTEXITCODE" }
 }
 
 $py = Join-Path $InstallDir ".venv\Scripts\python.exe"
 if (-not (Test-Path $py)) { throw "venv python missing: $py" }
 
-Write-Host "==> pip install faster-whisper"
-& uv pip install --python $py faster-whisper
+Write-Host "==> pip install faster-whisper (binary wheels preferred)"
+& uv pip install --python $py --only-binary "numpy,scipy,pandas,torch,torchaudio,av,tokenizers" faster-whisper
 if ($LASTEXITCODE -ne 0) { throw "faster-whisper install failed exit=$LASTEXITCODE" }
 
 $runner = Join-Path $InstallDir "run_asr.py"

@@ -240,10 +240,21 @@ function invalidateRuntimeDirCache() {
 }
 
 function portablePythonExe() {
-  // Prefer venv (from system Python) then embeddable portable
-  const venv = path.join(runtimeDir(), 'venv', 'Scripts', 'python.exe')
+  // Prefer a healthy runtime venv; otherwise portable embed.
+  // Empty/broken venvs (e.g. from Doubao sandbox Python) must not win over embed.
+  const rt = runtimeDir()
+  const embed = path.join(rt, 'python', 'python.exe')
+  const venv = path.join(rt, 'venv', 'Scripts', 'python.exe')
+  const site = path.join(rt, 'venv', 'Lib', 'site-packages')
+  const venvHealthy =
+    fs.existsSync(venv) &&
+    (fs.existsSync(path.join(site, 'fastapi')) ||
+      fs.existsSync(path.join(site, 'yaml')) ||
+      fs.existsSync(path.join(site, 'uvicorn')))
+  if (venvHealthy) return venv
+  if (fs.existsSync(embed)) return embed
   if (fs.existsSync(venv)) return venv
-  return path.join(runtimeDir(), 'python', 'python.exe')
+  return embed
 }
 
 function portableFfmpegExe() {
@@ -1517,6 +1528,9 @@ function ensureRuntimeBootstrap() {
         env: {
           ...process.env,
           AGENT_RUNTIME_DIR: runtimeDir(),
+          // Packaged (and normal desktop) must use portable Python — never Doubao/IDE sandboxes.
+          AGENT_PREFER_PORTABLE_PYTHON: '1',
+          AGENT_PACKAGED: app.isPackaged ? '1' : '0',
           PYTHONUNBUFFERED: '1',
           NO_PROXY: '127.0.0.1,localhost,::1',
           no_proxy: '127.0.0.1,localhost,::1',

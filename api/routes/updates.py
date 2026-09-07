@@ -123,15 +123,20 @@ def _normalize_release(source: str, payload: dict | None) -> dict | None:
         name = f"JY_IPAgent-Setup-{version}.exe"
         url = f"https://github.com/jiukemi/JY_IPAgent/releases/download/v{version}/{name}"
     if not url and source == "gitee":
-        name = f"九易AI智能体-Setup-{version}.exe"
-        from urllib.parse import quote
-
+        # Prefer ASCII asset name (Chinese filenames often mangle on Gitee).
+        name = f"JY_IPAgent-Setup-{version}.exe"
         url = (
             "https://gitee.com/webhwh/JY_IPAgent-/releases/download/"
-            f"v{version}/{quote(name)}"
+            f"v{version}/{name}"
         )
     html_url = str(payload.get("html_url") or payload.get("url") or "").strip()
     body = str(payload.get("body") or payload.get("description") or "").strip()
+    # Filename version must match release tag — catches stale/wrong assets.
+    file_ver = ""
+    m = re.search(r"Setup-([\d.]+)\.exe$", name or "", re.I)
+    if m:
+        file_ver = m.group(1)
+    version_mismatch = bool(file_ver and _parse_semver(file_ver) != _parse_semver(version))
     return {
         "source": source,
         "version": version,
@@ -141,6 +146,8 @@ def _normalize_release(source: str, payload: dict | None) -> dict | None:
         "html_url": html_url,
         "size": size,
         "notes": body[:2000],
+        "file_version": file_ver or version,
+        "version_mismatch": version_mismatch,
     }
 
 
@@ -166,13 +173,42 @@ def check_updates() -> dict:
     update_available = bool(newest and is_newer(newest["version"], local))
     # Only offer installers that are actually newer than the running app
     # (Gitee often lags GitHub — clicking an old Gitee mirror reinstalls e.g. 0.1.30).
-    usable = [m for m in mirrors if is_newer(m["version"], local)]
+    # Also drop assets whose filename version disagrees with the release tag.
+    usable = [
+        m
+        for m in mirrors
+        if is_newer(m["version"], local) and not m.get("version_mismatch")
+    ]
     usable.sort(key=lambda m: _parse_semver(m["version"]), reverse=True)
+    newest_ver = (newest or {}).get("version") or ""
+    for m in mirrors:
+        m["is_newest"] = bool(newest_ver and m.get("version") == newest_ver)
+        m["behind_latest"] = bool(
+            newest_ver and is_newer(newest_ver, str(m.get("version") or ""))
+        )
+    lagging = [
+        m
+        for m in mirrors
+        if m.get("behind_latest") or m.get("version_mismatch")
+    ]
     return {
         "ok": True,
         "current_version": local,
         "update_available": update_available,
         "latest": newest if update_available else newest,
-        "mirrors": usable if update_available else mirrors,
+        "mirrors": usable if update_available else [],
         "all_mirrors": mirrors,
+        "lagging_mirrors": lagging,
+        "warning": (
+            (
+                "有镜像源版本落后或文件名与版本不一致，请只点「推荐」最新版，"
+                "勿下旧包以免白装。"
+            )
+            if lagging and update_available
+            else (
+                "检测到某镜像源安装包文件名与版本不一致，已隐藏该下载按钮。"
+                if any(m.get("version_mismatch") for m in mirrors)
+                else ""
+            )
+        ),
     }

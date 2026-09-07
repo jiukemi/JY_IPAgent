@@ -235,6 +235,21 @@ function Write-PyMeta([string]$Exe) {
   Write-Log "==> python.json -> $Exe"
 }
 
+function Test-IsSuspiciousPythonPath([string]$Path) {
+  # Doubao / IDE sandboxes look like "system Python" but cannot create a reliable venv.
+  if (-not $Path) { return $true }
+  $p = $Path.ToLowerInvariant()
+  $bad = @(
+    'doubao', 'bytedance', 'bytehack', 'coze',
+    'cursor', 'codebuddy', '\sandbox\', '/sandbox/',
+    'ms-playwright', 'anaconda_envs_tmp'
+  )
+  foreach ($b in $bad) {
+    if ($p.Contains($b)) { return $true }
+  }
+  return $false
+}
+
 function Test-SystemPython {
   # Returns hashtable @{Exe=...; PrefArgs=string[]} or $null
   $candidates = @(
@@ -261,6 +276,10 @@ raise SystemExit(0 if sys.version_info[:2] >= (3, 10) else 1)
       continue
     }
     $exePath = $cmd.Source
+    if (Test-IsSuspiciousPythonPath $exePath) {
+      Write-Log "==> skip suspicious Python (sandbox/IDE): $exePath"
+      continue
+    }
     $argParts = @()
     $argParts += $c.PrefArgs
     $argParts += $probePy
@@ -362,21 +381,67 @@ function Ensure-EmbedPython {
 }
 
 # --- Resolve Python ---
+# Packaged desktop sets AGENT_PREFER_PORTABLE_PYTHON=1 so we never bind to
+# Doubao/IDE sandbox interpreters (empty venv + endless re-download).
+$preferPortable = ($env:AGENT_PREFER_PORTABLE_PYTHON -eq '1') -or ($env:AGENT_PACKAGED -eq '1')
 Write-ProgressLine 15 "Locate Python"
+Write-Log ("==> preferPortable=$preferPortable")
+
+function Test-PythonRunnable([string]$Exe) {
+  if (-not $Exe -or -not (Test-Path $Exe)) { return $false }
+  $probe = Join-Path $RuntimeRoot "_probe_run_py.py"
+  @'
+import sys
+raise SystemExit(0 if sys.version_info[:2] >= (3, 10) else 1)
+'@ | Set-Content -Path $probe -Encoding ASCII
+  try {
+    $code = Invoke-PyExe -Exe $Exe -Args @($probe)
+    return ($code -eq 0)
+  } catch {
+    return $false
+  } finally {
+    Remove-Item $probe -Force -ErrorAction SilentlyContinue
+  }
+}
+
+function Disable-BrokenVenv([string]$Reason) {
+  if (-not (Test-Path $VenvDir)) { return }
+  $bak = Join-Path $RuntimeRoot ("venv.broken-{0}" -f [DateTimeOffset]::UtcNow.ToUnixTimeSeconds())
+  Write-Log "==> disable broken venv ($Reason) -> $bak"
+  try {
+    Rename-Item -LiteralPath $VenvDir -NewName (Split-Path $bak -Leaf) -ErrorAction Stop
+  } catch {
+    Write-Log ("!! rename broken venv failed: {0}" -f $_.Exception.Message)
+  }
+}
+
 $PyExe = $null
-if (Test-Path $VenvPy) {
+if ((Test-Path $VenvPy) -and (Test-PythonRunnable $VenvPy)) {
   $PyExe = $VenvPy
   Write-Log "==> use existing venv"
-} else {
-  $sys = Test-SystemPython
-  if ($null -ne $sys) {
-    Write-ProgressLine 25 "Create venv from system Python"
-    Ensure-VenvFromSystem $sys
-    $PyExe = $VenvPy
-  } else {
+} elseif ((Test-Path $VenvPy) -and -not (Test-PythonRunnable $VenvPy)) {
+  Disable-BrokenVenv "python not runnable"
+}
+
+if (-not $PyExe) {
+  if ((Test-Path $EmbedPy) -and (Test-PythonRunnable $EmbedPy)) {
+    $PyExe = $EmbedPy
+    Write-Log "==> use existing portable embed"
+  } elseif ($preferPortable) {
     Write-ProgressLine 25 "Download portable Python"
     Ensure-EmbedPython
     $PyExe = $EmbedPy
+  } else {
+    $sys = Test-SystemPython
+    if ($null -ne $sys) {
+      Write-ProgressLine 25 "Create venv from system Python"
+      Ensure-VenvFromSystem $sys
+      $PyExe = $VenvPy
+    } else {
+      Write-ProgressLine 25 "Download portable Python"
+      Ensure-EmbedPython
+      $PyExe = $EmbedPy
+    }
   }
 }
 
@@ -389,15 +454,26 @@ Write-PyMeta $PyExe
 Write-ProgressLine 40 "Check pip"
 $code = Invoke-PyExe -Exe $PyExe -Args @("-m", "pip", "--version")
 if ($code -ne 0) {
-  Write-ProgressLine 45 "Install pip"
-  $getPip = Join-Path $RuntimeRoot "get-pip.py"
-  Get-File -Urls @(
-    "https://mirrors.aliyun.com/pypi/get-pip.py",
-    "https://bootstrap.pypa.io/get-pip.py"
-  ) -Out $getPip -ProgressBase 42 -ProgressSpan 3 -Label "Download get-pip"
-  $code = Invoke-PyExe -Exe $PyExe -Args @($getPip, "-i", $PipMirror, "--trusted-host", $PipHost) -HeartbeatPct 45 -HeartbeatLabel "Installing pip"
-  if ($code -ne 0) { throw "get-pip failed exit=$code" }
-  Remove-Item $getPip -Force -ErrorAction SilentlyContinue
+  # Broken system-derived venv: fall back to portable embed once.
+  if ($PyExe -eq $VenvPy -and $preferPortable) {
+    Write-Log "==> venv has no pip; switch to portable embed"
+    Disable-BrokenVenv "no pip"
+    Ensure-EmbedPython
+    $PyExe = $EmbedPy
+    Write-PyMeta $PyExe
+    $code = Invoke-PyExe -Exe $PyExe -Args @("-m", "pip", "--version")
+  }
+  if ($code -ne 0) {
+    Write-ProgressLine 45 "Install pip"
+    $getPip = Join-Path $RuntimeRoot "get-pip.py"
+    Get-File -Urls @(
+      "https://mirrors.aliyun.com/pypi/get-pip.py",
+      "https://bootstrap.pypa.io/get-pip.py"
+    ) -Out $getPip -ProgressBase 42 -ProgressSpan 3 -Label "Download get-pip"
+    $code = Invoke-PyExe -Exe $PyExe -Args @($getPip, "-i", $PipMirror, "--trusted-host", $PipHost) -HeartbeatPct 45 -HeartbeatLabel "Installing pip"
+    if ($code -ne 0) { throw "get-pip failed exit=$code" }
+    Remove-Item $getPip -Force -ErrorAction SilentlyContinue
+  }
 }
 
 # Skip pip if core already importable (helper file avoids -c comma quoting bugs)

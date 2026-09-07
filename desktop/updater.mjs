@@ -104,16 +104,51 @@ export function downloadFile(url, dest, onProgress) {
 }
 
 /**
- * @param {{ download_url: string, name?: string, version?: string }} release
+ * @param {string} url
+ * @param {string} [name]
+ */
+function extractSetupVersion(url, name = '') {
+  const blob = `${name || ''} ${url || ''}`
+  const m = blob.match(/Setup-([\d.]+)\.exe/i)
+  return m ? m[1].replace(/\.+$/, '') : ''
+}
+
+/**
+ * @param {string} a
+ * @param {string} b
+ */
+function sameVersion(a, b) {
+  const norm = (s) =>
+    String(s || '')
+      .trim()
+      .replace(/^[vV]/, '')
+      .replace(/\.+$/, '')
+  return norm(a) === norm(b) && Boolean(norm(a))
+}
+
+/**
+ * @param {{ download_url: string, name?: string, version?: string, expected_latest?: string }} release
  * @param {(pct: number) => void} [onProgress]
  */
 export async function downloadAndLaunchInstaller(release, onProgress) {
   const url = (release?.download_url || '').trim()
   if (!url) throw new Error('缺少下载地址')
   const version = (release.version || 'latest').replace(/[^\w.-]/g, '')
+  const fileVer = extractSetupVersion(url, release.name || '')
+  if (fileVer && version && version !== 'latest' && !sameVersion(fileVer, version)) {
+    throw new Error(
+      `已取消：链接/文件名版本 ${fileVer} 与标注 ${version} 不一致，避免白下载装错版。请重新检查更新后选推荐源。`,
+    )
+  }
+  const expected = (release.expected_latest || '').replace(/[^\w.-]/g, '')
+  if (expected && version && !sameVersion(expected, version)) {
+    throw new Error(
+      `已取消：当前最新应为 ${expected}，但所选下载是 ${version}。请点「推荐」最新版，勿下旧包。`,
+    )
+  }
   const safeName =
     (release.name && path.basename(release.name).replace(/[<>:"/\\|?*]/g, '_')) ||
-    `JY_IPAgent-Setup-${version}.exe`
+    `JY_IPAgent-Setup-${fileVer || version}.exe`
   const dest = path.join(updatesDir(), safeName)
   await downloadFile(url, dest, (pct) => {
     if (onProgress) onProgress(pct)

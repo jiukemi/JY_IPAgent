@@ -28,7 +28,9 @@ PENDING_PATH = REPO_ROOT / "data" / "job_worker_pending.json"
 _work_q: queue.PriorityQueue[tuple[int, int, str, str] | None] = queue.PriorityQueue()
 _seq = itertools.count()
 _started = False
-_start_lock = threading.Lock()
+# RLock: rehydrate_pending → submit/_pending_* must re-enter while starting.
+# A plain Lock deadlocks on startup whenever job_worker_pending.json is non-empty.
+_start_lock = threading.RLock()
 _worker_thread: threading.Thread | None = None
 
 
@@ -350,7 +352,16 @@ def start_job_worker() -> None:
         if _started:
             return
         _started = True
-        rehydrate_pending()
+    # Rehydrate outside the "first start" critical section so a stuck/corrupt
+    # pending file cannot prevent the worker thread from launching.
+    try:
+        n = rehydrate_pending()
+        log.info("rehydrated %s pending job(s)", n)
+    except Exception:
+        log.exception("rehydrate_pending failed; worker will start with empty queue")
+    with _start_lock:
+        if _worker_thread is not None and _worker_thread.is_alive():
+            return
         _worker_thread = threading.Thread(target=_worker_loop, name="job-worker", daemon=True)
         _worker_thread.start()
         log.info("job worker thread launched")

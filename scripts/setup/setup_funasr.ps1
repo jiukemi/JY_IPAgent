@@ -27,20 +27,61 @@ if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
   }
 }
 
-if (-not (Test-Path ".venv")) {
-  uv venv .venv
+# Prefer app runtime Python (3.11 wheels). System/Doubao/sandbox Python often
+# lacks MSVC and has no numpy wheel → uv builds from sdist and fails with
+# "Unknown compiler(s): cl/gcc".
+function Resolve-FunasrBasePython {
+  if ($rt) {
+    foreach ($cand in @(
+        (Join-Path $rt "venv\Scripts\python.exe"),
+        (Join-Path $rt "python\python.exe")
+      )) {
+      if (Test-Path $cand) { return $cand }
+    }
+  }
+  return $null
+}
+
+$basePy = Resolve-FunasrBasePython
+
+function Test-FunasrVenvOk {
+  $pyExe = Join-Path $funDir ".venv\Scripts\python.exe"
+  if (-not (Test-Path $pyExe)) { return $false }
+  & $pyExe -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<=(3,12) else 1)"
+  return ($LASTEXITCODE -eq 0)
+}
+
+if (-not (Test-FunasrVenvOk)) {
+  if (Test-Path ".venv") {
+    Write-Host "==> remove incompatible FunASR .venv (need CPython 3.10-3.12 wheels)"
+    Remove-Item ".venv" -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  if ($basePy) {
+    Write-Host "==> uv venv --python $basePy"
+    uv venv .venv --python $basePy
+  } else {
+    Write-Host "==> uv venv --python 3.11 (no runtime python found)"
+    uv venv .venv --python 3.11
+  }
   if ($LASTEXITCODE -ne 0) { throw "uv venv failed exit=$LASTEXITCODE" }
 }
 
 $py = Join-Path $funDir ".venv\Scripts\python.exe"
 if (-not (Test-Path $py)) { throw "venv python missing: $py" }
 
-Write-Host "==> pip install torch torchaudio funasr modelscope"
+# Never compile numpy/scipy/torch on end-user PCs (no Visual Studio).
+$binOnly = @("--only-binary", "numpy,scipy,pandas,scikit-learn,numba,llvmlite,torch,torchaudio")
+
+Write-Host "==> pip install torch torchaudio funasr modelscope (binary wheels only)"
 # torch first — torchaudio alone can leave a broken env on some mirrors
-& uv pip install --python $py "torch" "torchaudio"
-if ($LASTEXITCODE -ne 0) { throw "uv pip install torch/torchaudio failed exit=$LASTEXITCODE" }
-& uv pip install --python $py "funasr" "modelscope"
-if ($LASTEXITCODE -ne 0) { throw "uv pip install funasr/modelscope failed exit=$LASTEXITCODE" }
+& uv pip install --python $py @binOnly "torch" "torchaudio"
+if ($LASTEXITCODE -ne 0) {
+  throw "uv pip install torch/torchaudio failed exit=$LASTEXITCODE (need Python 3.10-3.12 wheels; do not use sandbox Python)"
+}
+& uv pip install --python $py @binOnly "numpy" "funasr" "modelscope"
+if ($LASTEXITCODE -ne 0) {
+  throw "uv pip install funasr/modelscope failed exit=$LASTEXITCODE (numpy must use a prebuilt wheel; install Visual Studio is NOT required)"
+}
 
 # Persist path for desktop runtime installs (use app runtime python — has PyYAML)
 if ($rt) {

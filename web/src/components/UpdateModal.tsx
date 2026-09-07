@@ -13,6 +13,10 @@ function desktop(): DesktopBridge | null {
   return (window as unknown as { agentDesktop?: DesktopBridge }).agentDesktop || null
 }
 
+function sourceLabel(source: string) {
+  return source === 'gitee' ? 'Gitee' : 'GitHub'
+}
+
 type Props = {
   /** Startup: silently check and prompt when newer. */
   autoCheck?: boolean
@@ -67,6 +71,7 @@ export function UpdateModal({ autoCheck = true, forceOpen = false, onClose }: Pr
   const latest = info?.latest
   const mirrors = info?.mirrors || []
   const current = info?.current_version || '—'
+  const lagging = info?.lagging_mirrors || []
 
   const close = () => {
     setDismissed(true)
@@ -75,6 +80,21 @@ export function UpdateModal({ autoCheck = true, forceOpen = false, onClose }: Pr
   }
 
   const download = async (release: UpdateRelease) => {
+    const best = (latest?.version || '').trim()
+    const picked = (release.version || '').trim()
+    if (release.version_mismatch) {
+      setError(
+        `已拦截：${sourceLabel(release.source)} 标注 ${picked}，但安装包文件名版本不一致，避免白下载装错版。`,
+      )
+      return
+    }
+    if (best && picked && best !== picked) {
+      const ok = window.confirm(
+        `注意：当前最新是 ${best}，你点的是 ${sourceLabel(release.source)} 的 ${picked}（更旧）。\n\n` +
+          `继续下载会装成旧版，等于白下。\n建议点「取消」，再选带（推荐）的最新按钮。\n\n仍要下载旧版 ${picked} 吗？`,
+      )
+      if (!ok) return
+    }
     setBusy(true)
     setPct(0)
     setError('')
@@ -109,7 +129,18 @@ export function UpdateModal({ autoCheck = true, forceOpen = false, onClose }: Pr
           ) : null}
           {info?.update_available ? (
             <span className="mt-1 block text-[11px] text-amber-700 dark:text-amber-200">
-              请点带版本号的按钮（推荐最新）。勿选更旧的镜像源，否则装完仍是旧版。
+              下载前会再次确认版本号。请只点带「推荐」的最新版；镜像源若落后会提示，勿下旧包以免白装。
+            </span>
+          ) : null}
+          {info?.warning ? (
+            <span className="mt-1 block text-[11px] text-amber-700 dark:text-amber-200">{info.warning}</span>
+          ) : null}
+          {lagging.length > 0 && info?.update_available ? (
+            <span className="mt-1 block text-[11px] text-[var(--muted)]">
+              落后/异常源：
+              {lagging
+                .map((m) => `${sourceLabel(m.source)} ${m.version}${m.version_mismatch ? '（文件名不符）' : ''}`)
+                .join('、')}
             </span>
           ) : null}
           {info && !info.update_available && !error ? (
@@ -150,7 +181,7 @@ export function UpdateModal({ autoCheck = true, forceOpen = false, onClose }: Pr
                 }
                 title={m.download_url}
               >
-                {m.source === 'gitee' ? 'Gitee' : 'GitHub'} 下载 {m.version}
+                {sourceLabel(m.source)} 下载 {m.version}
                 {idx === 0 ? '（推荐）' : ''}
               </button>
             ))}

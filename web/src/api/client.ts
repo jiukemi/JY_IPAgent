@@ -126,6 +126,11 @@ export type UpdateRelease = {
   html_url: string
   size: number
   notes: string
+  file_version?: string
+  version_mismatch?: boolean
+  is_newest?: boolean
+  behind_latest?: boolean
+  expected_latest?: string
 }
 
 export type UpdateCheckResult = {
@@ -135,6 +140,8 @@ export type UpdateCheckResult = {
   latest: UpdateRelease | null
   mirrors: UpdateRelease[]
   all_mirrors?: UpdateRelease[]
+  lagging_mirrors?: UpdateRelease[]
+  warning?: string
 }
 
 export const api = {
