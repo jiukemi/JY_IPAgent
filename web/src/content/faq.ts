@@ -71,6 +71,13 @@ export const FAQ_ITEMS: FaqItem[] = [
       + '处理：升到 0.1.37+ 后设置 → 本机环境 → 重装 IndexTTS2，等到出现 gpt.pth / s2mel.pth；合成前也会尝试自动补下。勿中断大文件下载。',
   },
   {
+    id: 'indextts-no-yaml',
+    q: '配音报 No module named yaml / ModuleNotFoundError: yaml？',
+    a:
+      'IndexTTS 专用 Python 环境缺 PyYAML，但配音桥接脚本需要它。\n'
+      + '处理：升到 0.1.38+（首次合成会自动 pip 安装）；或设置 → 本机环境 → 重装 IndexTTS2。',
+  },
+  {
     id: 'whisper-hub-timeout',
     q: '混剪一键提取字幕报 ConnectTimeout / LocalEntryNotFoundError？',
     a:

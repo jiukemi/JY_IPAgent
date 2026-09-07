@@ -4,12 +4,38 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+def _ensure_agent_bridge_deps() -> None:
+    """IndexTTS venv may lack packages used by agent bridge scripts (e.g. PyYAML)."""
+    try:
+        import yaml  # noqa: F401
+
+        return
+    except ImportError:
+        pass
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "pyyaml",
+        "-i",
+        "https://mirrors.aliyun.com/pypi/simple",
+        "--trusted-host",
+        "mirrors.aliyun.com",
+    ]
+    subprocess.check_call(cmd)
+
+
+_ensure_agent_bridge_deps()
 
 from tts.indextts_core import (  # noqa: E402
     create_index_tts2,

@@ -12,6 +12,33 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+
+def _ensure_agent_bridge_deps() -> None:
+    try:
+        import yaml  # noqa: F401
+
+        return
+    except ImportError:
+        pass
+    import subprocess
+
+    subprocess.check_call(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "pyyaml",
+            "-i",
+            "https://mirrors.aliyun.com/pypi/simple",
+            "--trusted-host",
+            "mirrors.aliyun.com",
+        ]
+    )
+
+
+_ensure_agent_bridge_deps()
+
 from tts.indextts_core import (  # noqa: E402
     create_index_tts2,
     load_project_cfg,

@@ -277,6 +277,17 @@ if (Test-Path "$InstallDir\.venv") {
     Remove-Item "$InstallDir\venv" -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# Agent bridge scripts (run_indextts.py) import PyYAML via tts.engine — not always in IndexTTS deps.
+$venvPy = Join-Path $InstallDir ".venv\Scripts\python.exe"
+if (-not (Test-Path $venvPy)) { $venvPy = Join-Path $InstallDir "venv\Scripts\python.exe" }
+if (Test-Path $venvPy) {
+    Write-Host "==> ensure PyYAML in IndexTTS venv (agent bridge)"
+    & uv pip install --python $venvPy "pyyaml" -i "https://mirrors.aliyun.com/pypi/simple"
+    if ($LASTEXITCODE -ne 0) {
+        & $venvPy -m pip install -q pyyaml -i "https://mirrors.aliyun.com/pypi/simple" --trusted-host mirrors.aliyun.com
+    }
+}
+
 Write-Host "==> Download IndexTTS-2 checkpoints (large, may take a while)..."
 $env:HF_ENDPOINT = "https://hf-mirror.com"
 $ckpt = Join-Path $InstallDir "checkpoints"
