@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -234,20 +235,22 @@ def _bundled_timestamps_runner() -> Path:
 
 
 def _ensure_timestamps_runner(engine_dir: Path) -> Path | None:
-    """Prefer engine-local runner; else ship bundled script (packaged mini has no tools/)."""
+    """Prefer engine-local runner; refresh from bundled script so upgrades pick up HF mirror fixes."""
     local = engine_dir / "run_asr_timestamps.py"
-    if local.is_file():
-        return local
     bundled = _bundled_timestamps_runner()
     if bundled.is_file():
         try:
             engine_dir.mkdir(parents=True, exist_ok=True)
-            local.write_text(bundled.read_text(encoding="utf-8"), encoding="utf-8")
+            text = bundled.read_text(encoding="utf-8")
+            if (not local.is_file()) or local.read_text(encoding="utf-8") != text:
+                local.write_text(text, encoding="utf-8")
             if local.is_file():
                 return local
         except OSError:
             return bundled
         return bundled
+    if local.is_file():
+        return local
     return None
 
 
@@ -288,14 +291,30 @@ def transcribe_dubbing_whisper(cfg: dict, audio_path: Path) -> list[dict]:
         "--out",
         str(out_json.resolve()),
     ]
-    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    env = os.environ.copy()
+    env.setdefault("HF_ENDPOINT", (cfg.get("hf_endpoint") or "https://hf-mirror.com"))
+    env.setdefault("HUGGINGFACE_HUB_ENDPOINT", env["HF_ENDPOINT"])
+    env.setdefault("PYTHONIOENCODING", "utf-8")
+    env.setdefault("PYTHONUTF8", "1")
+    proc = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        env=env,
+    )
     if proc.returncode != 0:
         err_tail = ((proc.stderr or "") + "\n" + (proc.stdout or "")).strip()[-800:]
         inline = _transcribe_dubbing_inline(cfg, audio_path)
         if inline:
             return inline
         raise RuntimeError(
-            "Whisper 字幕识别失败。请确认本机环境已安装 Whisper，网络可下载模型，且 FFmpeg 可用。\n"
+            "Whisper 字幕识别失败。\n"
+            "常见原因：首次下载模型连不上 huggingface.co（超时）。\n"
+            "处理：① 升到 0.1.37+ 并重装 Whisper（会走 hf-mirror 预下载）；"
+            "② 开梯子或确认可访问 https://hf-mirror.com 后重试；"
+            "③ 确认 FFmpeg 可用。\n"
             + (err_tail or f"exit={proc.returncode}")
         )
     try:

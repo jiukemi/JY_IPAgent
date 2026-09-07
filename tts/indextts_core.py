@@ -80,6 +80,93 @@ def model_paths(cfg: dict) -> tuple[Path, Path]:
     return cfg_path, model_dir
 
 
+# Core weights required before IndexTTS2 can load (partial downloads often miss these).
+_CORE_CHECKPOINT_FILES: tuple[tuple[str, int], ...] = (
+    ("gpt.pth", 100_000_000),
+    ("s2mel.pth", 50_000_000),
+    ("bpe.model", 1000),
+    ("feat1.pt", 1000),
+    ("feat2.pt", 1000),
+    ("wav2vec2bert_stats.pt", 1000),
+)
+
+
+def missing_core_checkpoints(model_dir: Path) -> list[str]:
+    missing: list[str] = []
+    for name, min_size in _CORE_CHECKPOINT_FILES:
+        p = model_dir / name
+        if not p.is_file() or p.stat().st_size < min_size:
+            missing.append(name)
+    return missing
+
+
+def core_checkpoints_ready(model_dir: Path) -> bool:
+    return not missing_core_checkpoints(model_dir)
+
+
+def _hf_mirror_env() -> None:
+    import os
+
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    os.environ.setdefault("HUGGINGFACE_HUB_ENDPOINT", "https://hf-mirror.com")
+
+
+def _snapshot_indextts(model_dir: Path, patterns: list[str] | None = None) -> None:
+    """Download IndexTTS-2 files into model_dir (ModelScope then HF mirror)."""
+    _hf_mirror_env()
+    last_err = ""
+    try:
+        from modelscope import snapshot_download
+
+        kwargs: dict = {"local_dir": str(model_dir)}
+        if patterns:
+            kwargs["allow_patterns"] = patterns
+        snapshot_download("IndexTeam/IndexTTS-2", **kwargs)
+        return
+    except Exception as exc:
+        last_err = f"modelscope: {exc}"
+    try:
+        from huggingface_hub import snapshot_download as hf_snap
+
+        kwargs = {
+            "repo_id": "IndexTeam/IndexTTS-2",
+            "local_dir": str(model_dir),
+            "local_dir_use_symlinks": False,
+        }
+        if patterns:
+            kwargs["allow_patterns"] = patterns
+        hf_snap(**kwargs)
+        return
+    except Exception as exc:
+        raise RuntimeError(f"IndexTTS 权重下载失败（{last_err}; hf: {exc}）") from exc
+
+
+def ensure_core_checkpoints(model_dir: Path) -> None:
+    """Ensure gpt.pth / s2mel.pth / … exist; repair partial installs."""
+    missing = missing_core_checkpoints(model_dir)
+    if not missing:
+        return
+    model_dir.mkdir(parents=True, exist_ok=True)
+    # If many core files missing, pull the whole repo; else only the gaps.
+    patterns = None if len(missing) >= 3 else list(missing)
+    try:
+        _snapshot_indextts(model_dir, patterns)
+    except Exception:
+        # Pattern-only download may not be supported — fall back to full
+        if patterns is not None:
+            _snapshot_indextts(model_dir, None)
+        else:
+            raise
+    still = missing_core_checkpoints(model_dir)
+    if still:
+        raise FileNotFoundError(
+            f"IndexTTS2 核心权重缺失: {', '.join(still)}\n"
+            f"目录: {model_dir}\n"
+            "请到「设置 → 本机环境」重装 IndexTTS2，并保持网络畅通（可用国内镜像）。\n"
+            "常见缺文件：gpt.pth（主模型，体积很大）。"
+        )
+
+
 def _qwen_emo_dir(model_dir: Path) -> Path:
     return (model_dir / "qwen0.6bemo4-merge").resolve()
 
@@ -110,33 +197,13 @@ def ensure_qwen_emo_model(model_dir: Path) -> Path:
 
     model_dir.mkdir(parents=True, exist_ok=True)
     last_err = ""
-    # Prefer ModelScope in CN, then HF mirror.
     try:
-        from modelscope import snapshot_download
-
-        snapshot_download(
-            "IndexTeam/IndexTTS-2",
-            local_dir=str(model_dir),
-            allow_patterns=["qwen0.6bemo4-merge/*", "qwen0.6bemo4-merge/**"],
+        _snapshot_indextts(
+            model_dir,
+            ["qwen0.6bemo4-merge/*", "qwen0.6bemo4-merge/**"],
         )
     except Exception as exc:
-        last_err = f"modelscope: {exc}"
-    if not qwen_emo_ready(model_dir):
-        try:
-            from huggingface_hub import snapshot_download as hf_snap
-
-            os_env_endpoint = __import__("os").environ.setdefault(
-                "HF_ENDPOINT", "https://hf-mirror.com"
-            )
-            _ = os_env_endpoint
-            hf_snap(
-                "IndexTeam/IndexTTS-2",
-                local_dir=str(model_dir),
-                allow_patterns=["qwen0.6bemo4-merge/*", "qwen0.6bemo4-merge/**"],
-                local_dir_use_symlinks=False,
-            )
-        except Exception as exc:
-            last_err = (last_err + f"; hf: {exc}").strip("; ")
+        last_err = str(exc)
 
     if not qwen_emo_ready(model_dir):
         raise FileNotFoundError(
@@ -149,7 +216,8 @@ def ensure_qwen_emo_model(model_dir: Path) -> Path:
 
 
 def prepare_indextts_cfg(cfg_path: Path, model_dir: Path) -> Path:
-    """Write a runtime config with absolute POSIX qwen_emo_path (Windows-safe for transformers)."""
+    """Ensure weights + write runtime config with absolute POSIX qwen_emo_path."""
+    ensure_core_checkpoints(model_dir)
     emo = ensure_qwen_emo_model(model_dir)
     try:
         from omegaconf import OmegaConf

@@ -64,6 +64,21 @@ export const FAQ_ITEMS: FaqItem[] = [
       + '处理：升到 0.1.36+ 后重试（会自动补下）；或设置 → 本机环境 → 重装 IndexTTS2，确认 runtime\\engines\\IndexTTS\\checkpoints\\qwen0.6bemo4-merge 里有 config.json 与大体积权重。',
   },
   {
+    id: 'indextts-gpt-pth',
+    q: '配音报 FileNotFoundError：…\\checkpoints\\gpt.pth？',
+    a:
+      'IndexTTS 主权重 gpt.pth 没下全（只装了部分 checkpoints）。\n'
+      + '处理：升到 0.1.37+ 后设置 → 本机环境 → 重装 IndexTTS2，等到出现 gpt.pth / s2mel.pth；合成前也会尝试自动补下。勿中断大文件下载。',
+  },
+  {
+    id: 'whisper-hub-timeout',
+    q: '混剪一键提取字幕报 ConnectTimeout / LocalEntryNotFoundError？',
+    a:
+      'Whisper 首次要从 HuggingFace 拉模型；直连 huggingface.co 常超时。\n'
+      + '处理：① 升到 0.1.37+ 并重装 Whisper（预下载走 hf-mirror）；② 开梯子或确认能访问 hf-mirror.com；③ 仅 FunASR 不够做第四步字幕时间轴。\n'
+      + '字幕失败时「一键成片」也可能导出失败；先修好字幕或关掉烧录字幕再导出。',
+  },
+  {
     id: 'extract-script',
     q: '提取文案失败 / 本地已选 FunASR 仍提示装 Whisper？',
     a:

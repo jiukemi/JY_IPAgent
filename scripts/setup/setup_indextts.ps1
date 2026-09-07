@@ -281,11 +281,13 @@ Write-Host "==> Download IndexTTS-2 checkpoints (large, may take a while)..."
 $env:HF_ENDPOINT = "https://hf-mirror.com"
 $ckpt = Join-Path $InstallDir "checkpoints"
 $emoCfg = Join-Path $ckpt "qwen0.6bemo4-merge\config.json"
+$gptPth = Join-Path $ckpt "gpt.pth"
 $needCkpt = -not (Test-Path (Join-Path $ckpt "config.yaml"))
 $needEmo = -not (Test-Path $emoCfg)
-if ($needCkpt -or $needEmo) {
-    if ($needEmo -and -not $needCkpt) {
-        Write-Host "==> checkpoints present but qwen0.6bemo4-merge missing — repair download"
+$needGpt = -not (Test-Path $gptPth)
+if ($needCkpt -or $needEmo -or $needGpt) {
+    if ((-not $needCkpt) -and ($needEmo -or $needGpt)) {
+        Write-Host "==> checkpoints incomplete (missing emo and/or gpt.pth) — repair download"
     }
     # Prefer ModelScope in CN when available.
     # Use a temp .py file — inline `python -c "..."` breaks under nested quotes / paths.
@@ -296,7 +298,7 @@ if ($needCkpt -or $needEmo) {
         Write-Host "==> try ModelScope download IndexTeam/IndexTTS-2"
         $dlPy = Join-Path $InstallDir "_ms_download_indextts2.py"
         $env:INDEXTTS_CKPT_DIR = $ckpt
-        if ($needCkpt) {
+        if ($needCkpt -or $needGpt) {
             @(
                 "import os"
                 "from modelscope import snapshot_download"
@@ -316,13 +318,13 @@ if ($needCkpt -or $needEmo) {
             Remove-Item $dlPy -Force -ErrorAction SilentlyContinue
             Remove-Item Env:INDEXTTS_CKPT_DIR -ErrorAction SilentlyContinue
         }
-        if ((Test-Path (Join-Path $ckpt "config.yaml")) -and (Test-Path $emoCfg)) { $msOk = $true }
+        if ((Test-Path (Join-Path $ckpt "config.yaml")) -and (Test-Path $emoCfg) -and (Test-Path $gptPth)) { $msOk = $true }
     } catch {
         Write-Host "    ModelScope failed: $($_.Exception.Message)"
     }
     if (-not $msOk) {
         Write-Host "==> fallback: hf-mirror download"
-        if ($needCkpt) {
+        if ($needCkpt -or $needGpt) {
             uv run hf download IndexTeam/IndexTTS-2 --local-dir $ckpt
         } else {
             uv run hf download IndexTeam/IndexTTS-2 --local-dir $ckpt --include "qwen0.6bemo4-merge/*"
@@ -331,6 +333,9 @@ if ($needCkpt -or $needEmo) {
 }
 if (-not (Test-Path (Join-Path $ckpt "config.yaml"))) {
     throw "IndexTTS checkpoints/config.yaml missing after download"
+}
+if (-not (Test-Path $gptPth)) {
+    throw "IndexTTS gpt.pth missing after download (main model weight)"
 }
 if (-not (Test-Path $emoCfg)) {
     throw "IndexTTS qwen0.6bemo4-merge missing after download (required for clone/emotion TTS)"

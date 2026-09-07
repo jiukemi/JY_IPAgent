@@ -72,17 +72,53 @@ $py = Join-Path $InstallDir ".venv\Scripts\python.exe"
 if (-not (Test-Path $py)) { throw "venv python missing: $py" }
 
 Write-Host "==> pip install faster-whisper (binary wheels preferred)"
+$env:HF_ENDPOINT = "https://hf-mirror.com"
+$env:HUGGINGFACE_HUB_ENDPOINT = "https://hf-mirror.com"
 & uv pip install --python $py --only-binary "numpy,scipy,pandas,torch,torchaudio,av,tokenizers" faster-whisper
 if ($LASTEXITCODE -ne 0) { throw "faster-whisper install failed exit=$LASTEXITCODE" }
+
+# Pre-download default ASR model so first subtitle extract does not hit huggingface.co timeout
+Write-Host "==> pre-download faster-whisper-small via hf-mirror (subtitle extract)"
+$modelsDir = Join-Path $InstallDir "models"
+New-Item -ItemType Directory -Force -Path $modelsDir | Out-Null
+$env:HF_HOME = Join-Path $modelsDir "hf_home"
+$preDl = Join-Path $InstallDir "_predownload_whisper.py"
+@(
+  "import os"
+  "os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')"
+  "os.environ.setdefault('HUGGINGFACE_HUB_ENDPOINT', 'https://hf-mirror.com')"
+  "from faster_whisper import WhisperModel"
+  "root = os.environ['WHISPER_MODELS_DIR']"
+  "print('download_root', root)"
+  "WhisperModel('small', device='cpu', compute_type='int8', download_root=root)"
+  "print('WHISPER_MODEL_OK')"
+) | Set-Content -Path $preDl -Encoding UTF8
+$env:WHISPER_MODELS_DIR = $modelsDir
+try {
+  & $py $preDl
+  if ($LASTEXITCODE -ne 0) {
+    Write-Host "!! Whisper model pre-download failed (exit=$LASTEXITCODE). First subtitle ASR may need network/mirror."
+  }
+} catch {
+  Write-Host "!! Whisper model pre-download skipped: $($_.Exception.Message)"
+} finally {
+  Remove-Item $preDl -Force -ErrorAction SilentlyContinue
+  Remove-Item Env:WHISPER_MODELS_DIR -ErrorAction SilentlyContinue
+}
 
 $runner = Join-Path $InstallDir "run_asr.py"
 @'
 """Minimal faster-whisper CLI used by script/extract.py."""
 from __future__ import annotations
 import argparse
+import os
 from pathlib import Path
 
 def main() -> None:
+    os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+    os.environ.setdefault("HUGGINGFACE_HUB_ENDPOINT", "https://hf-mirror.com")
+    models = Path(__file__).resolve().parent / "models"
+    models.mkdir(parents=True, exist_ok=True)
     p = argparse.ArgumentParser()
     p.add_argument("--audio", required=True)
     p.add_argument("--model", default="small")
@@ -97,12 +133,11 @@ def main() -> None:
             device, compute = "cuda", "float16"
     except Exception:
         pass
-    model = WhisperModel(args.model, device=device, compute_type=compute)
+    model = WhisperModel(args.model, device=device, compute_type=compute, download_root=str(models))
     segments, _info = model.transcribe(str(Path(args.audio).resolve()), language=args.language or None)
     text = "".join(seg.text for seg in segments).strip()
     if args.out:
         Path(args.out).write_text(text + ("\n" if text else ""), encoding="utf-8")
-    # Keep stdout clean: only the transcript (extract may fall back to stdout).
     print(text)
 
 if __name__ == "__main__":
@@ -110,63 +145,12 @@ if __name__ == "__main__":
 '@ | Set-Content -Path $runner -Encoding UTF8
 
 $runnerTs = Join-Path $InstallDir "run_asr_timestamps.py"
-# Prefer copying from shipped app script (same tree as setup when developing from repo)
+# Prefer copying from shipped app script (keeps HF mirror + download_root logic in sync)
 $shippedTs = Join-Path $Root "script\run_asr_timestamps.py"
 if (Test-Path -LiteralPath $shippedTs) {
   Copy-Item -LiteralPath $shippedTs -Destination $runnerTs -Force
 } else {
-@'
-"""faster-whisper CLI with segment timestamps for publish subtitle extract."""
-from __future__ import annotations
-import argparse, json, re
-from pathlib import Path
-
-def main() -> None:
-    p = argparse.ArgumentParser()
-    p.add_argument("--audio", required=True)
-    p.add_argument("--model", default="small")
-    p.add_argument("--language", default="zh")
-    p.add_argument("--out", default="")
-    args = p.parse_args()
-    from faster_whisper import WhisperModel
-    device, compute = "cpu", "int8"
-    try:
-        import torch
-        if torch.cuda.is_available():
-            device, compute = "cuda", "float16"
-    except Exception:
-        pass
-    model = WhisperModel(args.model, device=device, compute_type=compute)
-    segments, _info = model.transcribe(
-        str(Path(args.audio).resolve()),
-        language=args.language or None,
-        vad_filter=True,
-        word_timestamps=True,
-    )
-    out = []
-    for i, seg in enumerate(segments):
-        text = re.sub(r"\s+", "", (seg.text or "").strip())
-        if not text:
-            continue
-        words_out = []
-        for w in seg.words or []:
-            wtext = re.sub(r"\s+", "", (getattr(w, "word", None) or "").strip())
-            if not wtext:
-                continue
-            words_out.append({"word": wtext, "start": round(float(w.start), 3), "end": round(float(w.end), 3)})
-        item = {"index": i + 1, "start": round(float(seg.start), 3), "end": round(float(seg.end), 3), "text": text}
-        if words_out:
-            item["words"] = words_out
-        out.append(item)
-    payload = {"segments": out}
-    raw = json.dumps(payload, ensure_ascii=False)
-    if args.out:
-        Path(args.out).write_text(raw, encoding="utf-8")
-    print(raw)
-
-if __name__ == "__main__":
-    main()
-'@ | Set-Content -Path $runnerTs -Encoding UTF8
+  Copy-Item -LiteralPath $runner -Destination $runnerTs -Force
 }
 
 & $py -c "import faster_whisper; print('WHISPER_OK')"
@@ -186,4 +170,4 @@ if ($rt) {
 
 Write-Host ""
 Write-Host "Done. WHISPER_DIR=$InstallDir"
-Write-Host "Models download on first run (model=small by default)."
+Write-Host "Models cache: $modelsDir (small pre-downloaded when network allows)."
