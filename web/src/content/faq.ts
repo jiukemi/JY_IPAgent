@@ -50,6 +50,13 @@ export const FAQ_ITEMS: FaqItem[] = [
       '0.1.31+ 已加强参考音路径解析。若仍遇到：① 音色管理上传并点「保存到音色库」；② 关闭后在下方「克隆音色」点选该条（高亮），不要停在系统预设；③ 系统预设也要能用则到本机环境重装 IndexTTS 补 examples；④ 仍失败则删除该音色后重新上传，确认能试听再生成。',
   },
   {
+    id: 'indextts-checkpoints',
+    q: '克隆/配音报 IndexTTS2 模型未找到 tools\\IndexTTS\\checkpoints？',
+    a:
+      '打包版模型在运行时 engines\\IndexTTS\\checkpoints，不在安装目录 tools 下。\n'
+      + '处理：① 升到 0.1.35+（会自动找运行时模型）；② 设置 → 本机环境 → 安装/重装 IndexTTS2，等 checkpoints 下完；③ 确认已选克隆音色再合成。勿只拷安装包目录里的空 tools 路径。',
+  },
+  {
     id: 'extract-script',
     q: '提取文案失败 / 本地已选 FunASR 仍提示装 Whisper？',
     a:

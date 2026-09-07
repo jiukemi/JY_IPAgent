@@ -58,7 +58,7 @@ def venv_python(cfg: dict, key: str) -> str:
                 "piper_dir": ("tools/Piper", "Piper", ("zh_CN-huayan-medium.onnx",)),
                 "qwen3_local_dir": ("tools/Qwen3-TTS", "Qwen3-TTS", ("models",)),
                 "whisper_dir": ("tools/Whisper", "Whisper", ("run_asr.py",)),
-                "indextts_dir": ("tools/IndexTTS", "IndexTTS", ("pyproject.toml",)),
+                "indextts_dir": ("tools/IndexTTS", "IndexTTS", ("checkpoints/config.yaml", "pyproject.toml")),
             }
             default_rel, runtime_name, markers = mapping[key]
             root = resolve_engine_dir(
@@ -234,28 +234,64 @@ def _run_backend_subprocess(
 
 
 def resolve_indextts_install_dir(cfg: dict) -> Path:
-    """Prefer configured path; fall back to writable runtime engines dir if present."""
+    """Prefer a real IndexTTS install (checkpoints), including runtime engines/."""
     import os
 
     raw = Path(cfg.get("paths", {}).get("indextts_dir", "tools/IndexTTS"))
     primary = raw if raw.is_absolute() else (project_root() / raw)
-    candidates = [primary]
+    candidates: list[Path] = [primary]
     rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
     if rt:
         candidates.append(Path(rt).expanduser().resolve() / "engines" / "IndexTTS")
+    try:
+        candidates.append(project_root() / "tools" / "IndexTTS")
+    except Exception:
+        pass
 
-    def _usable(p: Path) -> bool:
-        return (p / "checkpoints" / "config.yaml").is_file() or (
-            p / ".venv" / "Scripts" / "python.exe"
-        ).is_file() or (p / "venv" / "Scripts" / "python.exe").is_file()
-
-    for c in candidates:
+    def _score(p: Path) -> int:
+        s = 0
         try:
-            if _usable(c):
-                return c.resolve()
+            if (p / "checkpoints" / "config.yaml").is_file():
+                s += 10
+            if (p / ".venv" / "Scripts" / "python.exe").is_file() or (
+                p / "venv" / "Scripts" / "python.exe"
+            ).is_file():
+                s += 2
+            if (p / "pyproject.toml").is_file() or (p / "indextts").is_dir():
+                s += 1
+            if p.is_dir():
+                s += 0
         except OSError:
-            continue
-    return primary.resolve()
+            return -1
+        return s
+
+    best = primary
+    best_s = -1
+    for c in candidates:
+        sc = _score(c)
+        if sc > best_s:
+            best_s = sc
+            best = c
+    try:
+        return best.resolve()
+    except OSError:
+        return best
+
+
+def active_config_path(cfg: dict | None = None) -> Path:
+    """Config file path for TTS subprocesses (respect AGENT_CONFIG / runtime)."""
+    try:
+        from workflow.app_config import CONFIG_PATH
+
+        if CONFIG_PATH.is_file():
+            return CONFIG_PATH.resolve()
+    except Exception:
+        pass
+    if cfg and isinstance(cfg.get("_config_path"), str):
+        p = Path(cfg["_config_path"])
+        if p.is_file():
+            return p.resolve()
+    return Path("config.yaml").resolve()
 
 
 def find_indextts_reference(cfg: dict) -> Path | None:
@@ -369,7 +405,7 @@ def _indextts_subprocess(
         py,
         str(Path(__file__).resolve().parent / "run_indextts.py"),
         "--config",
-        str(Path("config.yaml").resolve()),
+        str(active_config_path(cfg)),
         "--text-file",
         str(text_file.resolve()),
         "--output",
@@ -407,7 +443,7 @@ def _cosyvoice_subprocess(
         py,
         str(Path(__file__).resolve().parent / "run_cosyvoice.py"),
         "--config",
-        str(Path("config.yaml").resolve()),
+        str(active_config_path(cfg)),
         "--text-file",
         str(text_file.resolve()),
         "--output",
@@ -466,7 +502,7 @@ def _qwen3_local_subprocess(
         py,
         str(Path(__file__).resolve().parent / "run_qwen3_local.py"),
         "--config",
-        str(Path("config.yaml").resolve()),
+        str(active_config_path(cfg)),
         "--text-file",
         str(text_file.resolve()),
         "--output",
@@ -536,7 +572,7 @@ def _piper_subprocess(
         py,
         str(Path(__file__).resolve().parent / "run_piper.py"),
         "--config",
-        str(Path("config.yaml").resolve()),
+        str(active_config_path(cfg)),
         "--text",
         text,
         "--output",

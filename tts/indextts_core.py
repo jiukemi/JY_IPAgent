@@ -65,13 +65,17 @@ def resolve_speak_emo_spk(
 
 
 def model_paths(cfg: dict) -> tuple[Path, Path]:
-    it_cfg = cfg.get("indextts", {})
-    install = Path(cfg["paths"]["indextts_dir"])
+    from tts.engine import resolve_indextts_install_dir
+
+    it_cfg = cfg.get("indextts", {}) or {}
+    install = resolve_indextts_install_dir(cfg)
     model_dir = install / it_cfg.get("model_dir", "checkpoints")
     cfg_path = model_dir / "config.yaml"
     if not cfg_path.exists():
         raise FileNotFoundError(
-            f"IndexTTS2 模型未找到: {model_dir}\n请运行 .\\scripts\\setup\\setup_indextts.ps1"
+            f"IndexTTS2 模型未找到: {model_dir}\n"
+            "请到「设置 → 本机环境」安装/重装 IndexTTS2（会下载 checkpoints）。\n"
+            "打包版模型在运行时目录 engines\\IndexTTS\\checkpoints，不是安装目录下的 tools\\IndexTTS。"
         )
     return cfg_path, model_dir
 

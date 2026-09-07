@@ -21,10 +21,14 @@ def is_worker_running() -> bool:
 
 
 def _cfg_key(cfg: dict) -> str:
+    from tts.engine import resolve_indextts_install_dir
+
     it = cfg.get("indextts", {}) or {}
-    return str(Path(cfg.get("paths", {}).get("indextts_dir", "")).resolve()) + "|" + str(
-        it.get("model_dir", "checkpoints")
-    )
+    try:
+        root = str(resolve_indextts_install_dir(cfg))
+    except Exception:
+        root = str(Path(cfg.get("paths", {}).get("indextts_dir", "")).resolve())
+    return root + "|" + str(it.get("model_dir", "checkpoints"))
 
 
 def worker_enabled(cfg: dict) -> bool:
@@ -53,9 +57,11 @@ def shutdown_indextts_worker() -> None:
 
 
 def _start_worker(cfg: dict) -> subprocess.Popen:
+    from tts.engine import active_config_path
+
     py = venv_python(cfg, "indextts_dir")
     worker_script = Path(__file__).resolve().parent / "indextts_worker.py"
-    config_path = Path("config.yaml").resolve()
+    config_path = active_config_path(cfg)
     cmd = [py, "-u", str(worker_script), "--config", str(config_path), "--stdio"]
     proc = subprocess.Popen(
         cmd,
