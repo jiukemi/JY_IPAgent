@@ -33,7 +33,10 @@ $staging = Join-Path $parentDir "IndexTTS_staging"
 $zipPath = Join-Path $parentDir "IndexTTS_src.zip"
 
 function Test-IndexTtsSource([string]$Dir) {
-    return (Test-Path (Join-Path $Dir "pyproject.toml"))
+    # pyproject alone is not enough (accel/partial dirs may leave a stub).
+    $py = Join-Path $Dir "pyproject.toml"
+    $infer = Join-Path $Dir "indextts\infer_v2.py"
+    return ((Test-Path $py) -and (Test-Path $infer))
 }
 
 function Copy-IndexTtsTree([string]$From, [string]$To) {
@@ -207,6 +210,7 @@ function Fetch-IndexTtsSource([string]$Target) {
 
 # --- acquire source ---
 if (-not (Test-IndexTtsSource $InstallDir)) {
+    Write-Host "==> IndexTTS source incomplete (need pyproject.toml + indextts/infer_v2.py) — fetch"
     Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
     if (-not (Fetch-IndexTtsSource $staging)) {
         throw @"
@@ -221,8 +225,8 @@ if (-not (Test-IndexTtsSource $InstallDir)) {
 1) 安装 Git for Windows：https://git-scm.com/download/win
 2) 手动 git clone 上述任一 Gitee 地址到：
    $InstallDir
-   （目录内需有 pyproject.toml；权重仍由安装脚本从 ModelScope 拉取）
-3) 或从 GitHub ZIP 解压到同一目录后点「重新排队」
+   （目录内需有 pyproject.toml 与 indextts\infer_v2.py；权重仍由安装脚本从 ModelScope 拉取）
+3) 或从 GitHub ZIP 解压到同一目录后在任务中心点「重新排队」
 
 目标目录：$InstallDir
 "@
@@ -230,13 +234,29 @@ if (-not (Test-IndexTtsSource $InstallDir)) {
     if (-not (Copy-IndexTtsTree $staging $InstallDir)) {
         # staging may already be the tree
         if (Test-IndexTtsSource $staging) {
+            # Preserve existing checkpoints when replacing tree
+            $ckptBackup = Join-Path $parentDir "IndexTTS_ckpt_backup"
+            $ckptSrc = Join-Path $InstallDir "checkpoints"
+            if (Test-Path $ckptSrc) {
+                Remove-Item $ckptBackup -Recurse -Force -ErrorAction SilentlyContinue
+                Move-Item $ckptSrc $ckptBackup -ErrorAction SilentlyContinue
+            }
             Remove-Item $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
             Move-Item $staging $InstallDir
+            if (Test-Path $ckptBackup) {
+                $ckptDst = Join-Path $InstallDir "checkpoints"
+                if (-not (Test-Path $ckptDst)) {
+                    Move-Item $ckptBackup $ckptDst
+                } else {
+                    robocopy $ckptBackup $ckptDst /E /NFL /NDL /NJH /NJS /nc /ns /np | Out-Null
+                    Remove-Item $ckptBackup -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
         }
     }
     Remove-Item $staging -Recurse -Force -ErrorAction SilentlyContinue
     if (-not (Test-IndexTtsSource $InstallDir)) {
-        throw "源码同步失败：$InstallDir 缺少 pyproject.toml"
+        throw "源码同步失败：$InstallDir 缺少 pyproject.toml 或 indextts\infer_v2.py"
     }
 } else {
     Write-Host "==> IndexTTS source exists, skip download"

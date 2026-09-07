@@ -113,15 +113,19 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
           ? `「${fin.title}」已完成，设置中的引擎状态已更新。`
           : `「${fin.title}」脚本已跑完，但引擎尚未完全就绪。${
               missing ? `\n\n${missing}\n\n` : '\n\n'
-            }请到任务中心查看日志；可再点一次安装修复依赖。`,
+            }请在下方引擎卡片点「重装 / 修复」，或打开任务中心对失败任务点「重新排队」。`,
         variant: ready ? 'success' : 'info',
       })
+      if (!ready) jobQueue.setCenterOpen(true)
     } else if (fin.status === 'failed') {
       setAlert({
         title: '安装失败',
-        message: fin.error || fin.message || '请到任务中心查看错误日志',
+        message:
+          (fin.error || fin.message || '请到任务中心查看错误日志') +
+          '\n\n可在本页引擎卡片点「重装 / 修复」，或任务中心点「重新排队」。',
         variant: 'error',
       })
+      jobQueue.setCenterOpen(true)
     }
   }, [jobQueue.completionTick, jobQueue.lastFinished, load, onRefresh])
 
@@ -132,9 +136,11 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
       .filter(Boolean),
   )
 
-  const runInstall = async (engine: string) => {
+  const runInstall = async (engine: string, opts?: { forceRepair?: boolean }) => {
     const st = engines.find((e) => e.engine === engine)
-    if (st && !st.compatible) {
+    const forceRepair = !!opts?.forceRepair || !!(st && !st.ready && st.missing.length > 0)
+    // VRAM gate: still allow repair when already partially installed / missing files
+    if (st && !st.compatible && !forceRepair) {
       const why =
         st.missing?.length > 0
           ? st.missing
@@ -144,7 +150,7 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
           : `建议显存 ≥ ${st.min_vram_gb}GB`
       setAlert({
         title: '本机暂不支持该引擎',
-        message: `「${st.label}」需要更高配置。\n\n${why}\n\n低配机请改用：云端 Qwen3-TTS，或本机 Piper（几乎无显存要求）。`,
+        message: `「${st.label}」需要更高配置。\n\n${why}\n\n低配机请改用：云端 Qwen3-TTS，或本机 Piper（几乎无显存要求）。\n若只是缺文件/源码，仍可点「强制重装」尝试修复。`,
         variant: 'error',
       })
       return
@@ -166,7 +172,7 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
     try {
       const outcome = await jobQueue.enqueue({
         type: 'engine_install',
-        title: `安装 ${st?.label || engine}`,
+        title: `${st && !st.ready && (st.installed || st.missing.length) ? '重装' : '安装'} ${st?.label || engine}`,
         force: true,
         priority: 20,
         payload: { engine },
@@ -349,26 +355,50 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
                         )}
                       </div>
                       {st.ready && !installing ? (
-                        <span className="shrink-0 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-700 dark:text-emerald-300">
-                          已就绪
-                        </span>
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          <span className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-emerald-700 dark:text-emerald-300">
+                            已就绪
+                          </span>
+                          {st.setup_script && (
+                            <button
+                              type="button"
+                              onClick={() => void runInstall(st.engine, { forceRepair: true })}
+                              className="text-[10px] text-[var(--muted)] underline hover:text-[var(--accent)]"
+                            >
+                              强制重装
+                            </button>
+                          )}
+                        </div>
                       ) : st.setup_script ? (
-                        <button
-                          type="button"
-                          disabled={installing}
-                          onClick={() => void runInstall(st.engine)}
-                          className={`shrink-0 rounded-lg border px-2.5 py-1 disabled:opacity-50 ${
-                            st.compatible
-                              ? 'border-[var(--select-border)] bg-[var(--select-bg)] text-[var(--accent)]'
-                              : 'border-red-400/40 bg-red-500/10 text-red-700 dark:text-red-300'
-                          }`}
-                        >
-                          {installing
-                            ? '任务中心安装中…'
-                            : st.compatible
-                              ? '一键安装'
-                              : '查看不支持原因'}
-                        </button>
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          <button
+                            type="button"
+                            disabled={installing}
+                            onClick={() =>
+                              void runInstall(st.engine, {
+                                forceRepair: !st.compatible || st.missing.length > 0,
+                              })
+                            }
+                            className={`rounded-lg border px-2.5 py-1 disabled:opacity-50 ${
+                              st.compatible || st.missing.length > 0
+                                ? 'border-[var(--select-border)] bg-[var(--select-bg)] text-[var(--accent)]'
+                                : 'border-red-400/40 bg-red-500/10 text-red-700 dark:text-red-300'
+                            }`}
+                          >
+                            {installing
+                              ? '任务中心安装中…'
+                              : st.installed || st.missing.length > 0
+                                ? '重装 / 修复'
+                                : st.compatible
+                                  ? '一键安装'
+                                  : '强制重装'}
+                          </button>
+                          {!st.compatible && st.missing.length === 0 && (
+                            <span className="max-w-[9rem] text-right text-[10px] text-red-700 dark:text-red-300">
+                              本机配置偏低，仍可尝试强制重装
+                            </span>
+                          )}
+                        </div>
                       ) : null}
                     </div>
                     {st.missing.length > 0 && (
@@ -378,9 +408,18 @@ export function ModelSetupPanel({ currentEngine, onRefresh, defaultOpen = false 
                           .map((m) => (
                             <li
                               key={m}
-                              className="rounded-lg border border-amber-300/40 bg-amber-50 px-2.5 py-1.5 text-amber-950 dark:border-amber-500/30 dark:bg-amber-950/40 dark:text-amber-100"
+                              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300/40 bg-amber-50 px-2.5 py-1.5 text-amber-950 dark:border-amber-500/30 dark:bg-amber-950/40 dark:text-amber-100"
                             >
-                              {m}
+                              <span className="min-w-0 flex-1">{m}</span>
+                              {st.setup_script && !installing && !st.ready && (
+                                <button
+                                  type="button"
+                                  onClick={() => void runInstall(st.engine, { forceRepair: true })}
+                                  className="shrink-0 rounded border border-amber-500/50 px-2 py-0.5 text-[10px] font-medium hover:bg-amber-500/15"
+                                >
+                                  修复此项
+                                </button>
+                              )}
                             </li>
                           ))}
                       </ul>

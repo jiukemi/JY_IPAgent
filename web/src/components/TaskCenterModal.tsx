@@ -256,7 +256,12 @@ function JobRow({
               优先
             </button>
           )}
-          {(job.status === 'failed' || job.status === 'cancelled') && onRequeue && (
+          {(job.status === 'failed' ||
+            job.status === 'cancelled' ||
+            (job.status === 'done' &&
+              job.type === 'engine_install' &&
+              job.result?.ready === false)) &&
+            onRequeue && (
             <button
               type="button"
               onClick={onRequeue}

@@ -239,15 +239,22 @@ def _run_backend_subprocess(
 
 
 def resolve_indextts_install_dir(cfg: dict) -> Path:
-    """Prefer a real IndexTTS install (checkpoints), including runtime engines/."""
+    """Prefer packaged runtime engines/IndexTTS (same path as setup InstallDir)."""
     import os
+
+    rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
+    if rt:
+        runtime = Path(rt).expanduser().resolve() / "engines" / "IndexTTS"
+        # Packaged app always installs here — avoid split-brain with stale config paths.
+        try:
+            runtime.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        return runtime
 
     raw = Path(cfg.get("paths", {}).get("indextts_dir", "tools/IndexTTS"))
     primary = raw if raw.is_absolute() else (project_root() / raw)
     candidates: list[Path] = [primary]
-    rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
-    if rt:
-        candidates.append(Path(rt).expanduser().resolve() / "engines" / "IndexTTS")
     try:
         candidates.append(project_root() / "tools" / "IndexTTS")
     except Exception:
@@ -256,11 +263,10 @@ def resolve_indextts_install_dir(cfg: dict) -> Path:
     def _score(p: Path) -> int:
         s = 0
         try:
+            if (p / "indextts" / "infer_v2.py").is_file():
+                s += 20
             if (p / "checkpoints" / "config.yaml").is_file():
                 s += 10
-            # Prefer installs that can actually `import indextts` (source tree or editable).
-            if (p / "indextts" / "infer_v2.py").is_file():
-                s += 8
             if (p / ".venv" / "Scripts" / "python.exe").is_file() or (
                 p / "venv" / "Scripts" / "python.exe"
             ).is_file():

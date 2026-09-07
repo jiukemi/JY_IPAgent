@@ -659,10 +659,6 @@ def run_engine_install(
         from tts.engine import resolve_indextts_install_dir
 
         install = resolve_indextts_install_dir(cfg)
-        # Prefer runtime engines path when packaging / AGENT_RUNTIME_DIR is set
-        rt = (os.environ.get("AGENT_RUNTIME_DIR") or "").strip()
-        if rt:
-            install = Path(rt).expanduser().resolve() / "engines" / "IndexTTS"
         ps_args.extend(["-Root", str(root), "-InstallDir", str(install)])
         tick(0.03, f"安装目录：{install}")
     elif eng == "cosyvoice":
@@ -759,11 +755,21 @@ def run_engine_install(
     if int(code or 0) != 0 and not st2.get("ready"):
         tail = "\n".join(log_lines[-30:])
         raise RuntimeError(f"安装失败（exit={code}）\n{tail}")
+    # Script exit 0 but engine still incomplete → treat as failed so用户可「重新排队」
+    if not st2.get("ready"):
+        missing = list(st2.get("missing") or [])
+        why = "；".join(str(m) for m in missing[:4]) if missing else "引擎未就绪"
+        tail = "\n".join(log_lines[-20:])
+        raise RuntimeError(
+            f"安装脚本已结束，但「{st2.get('label') or check_id}」尚未就绪：{why}\n"
+            "请到设置 → 特殊引擎安装 → 本机环境点「重装 / 修复」，或在任务中心对本任务点「重新排队」。\n"
+            f"{tail}"
+        )
     return {
-        "ok": bool(st2.get("ready")),
+        "ok": True,
         "engine": check_id,
         "model": st2.get("label") or check_id,
-        "ready": bool(st2.get("ready")),
+        "ready": True,
         "missing": list(st2.get("missing") or []),
         "exit_code": int(code or 0),
         "log": "\n".join(log_lines[-80:]),

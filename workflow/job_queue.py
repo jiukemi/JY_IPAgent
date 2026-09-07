@@ -558,7 +558,7 @@ def prioritize_job(session: Path, job_id: str, *, priority: int = 100) -> dict[s
 
 
 def requeue_job(session: Path, job_id: str) -> dict[str, Any]:
-    """Re-queue a failed/cancelled job with the same payload (full re-run, not mid-point resume)."""
+    """Re-queue a failed/cancelled (or incomplete engine_install) job for a full re-run."""
     session = Path(session)
     with _hold_index(session):
         jobs = _load_index(session)
@@ -566,8 +566,18 @@ def requeue_job(session: Path, job_id: str) -> dict[str, Any]:
             if j.get("id") != job_id:
                 continue
             st = j.get("status")
-            if st not in ("failed", "cancelled"):
-                return {"ok": False, "message": "仅失败或已取消的任务可重新排队", "job": dict(j)}
+            result = j.get("result") if isinstance(j.get("result"), dict) else {}
+            incomplete_done = (
+                st == "done"
+                and j.get("type") == "engine_install"
+                and result.get("ready") is False
+            )
+            if st not in ("failed", "cancelled") and not incomplete_done:
+                return {
+                    "ok": False,
+                    "message": "仅失败、已取消，或「安装未就绪」的引擎任务可重新排队",
+                    "job": dict(j),
+                }
             jobs[i] = {
                 **j,
                 "status": "queued",
