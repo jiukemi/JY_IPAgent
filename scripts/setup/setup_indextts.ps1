@@ -410,6 +410,50 @@ if (Test-Path $venvPy) {
         Copy-Item $exSrc (Join-Path $exDstDir "voice_01.wav")
         Write-Host "    copied examples/voice_01.wav -> checkpoints/examples/"
     }
+
+    Write-Host "==> pre-download hf_cache aux (w2v-bert-2.0 / codec / bigvgan)…"
+    $env:HF_ENDPOINT = "https://hf-mirror.com"
+    $env:HUGGINGFACE_HUB_ENDPOINT = "https://hf-mirror.com"
+    $env:INDEXTTS_CKPT_DIR = $ckpt
+    $env:INDEXTTS_INSTALL_DIR = $InstallDir
+    $auxPy = Join-Path $InstallDir "_predownload_hf_cache.py"
+    @(
+        "import os, shutil, sys"
+        "from pathlib import Path"
+        "os.environ.setdefault('HF_ENDPOINT', 'https://hf-mirror.com')"
+        "os.environ.setdefault('HUGGINGFACE_HUB_ENDPOINT', 'https://hf-mirror.com')"
+        "model_dir = Path(os.environ['INDEXTTS_CKPT_DIR'])"
+        "install = Path(os.environ['INDEXTTS_INSTALL_DIR'])"
+        "cache = model_dir / 'hf_cache'"
+        "w2v = cache / 'w2v-bert-2.0'"
+        "def weight_ok(d, min_b=50_000_000):"
+        "    if not d.is_dir(): return False"
+        "    for n in ('model.safetensors','pytorch_model.bin','model.safetensors.index.json'):"
+        "        p = d / n"
+        "        if p.is_file() and (n.endswith('.json') or p.stat().st_size >= min_b): return True"
+        "    return any(p.stat().st_size >= min_b for p in d.glob('*.safetensors'))"
+        "if w2v.exists() and not weight_ok(w2v):"
+        "    print('remove incomplete w2v-bert-2.0')"
+        "    shutil.rmtree(w2v, ignore_errors=True)"
+        "sys.path.insert(0, str(install))"
+        "from indextts.utils.model_download import ensure_models_available"
+        "ensure_models_available(str(model_dir))"
+        "if not weight_ok(w2v):"
+        "    raise SystemExit('w2v-bert-2.0 still incomplete after download')"
+        "print('HF_CACHE_AUX_OK')"
+    ) | Set-Content -Path $auxPy -Encoding UTF8
+    try {
+        & $venvPy $auxPy
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "!! hf_cache aux pre-download incomplete (exit=$LASTEXITCODE). First TTS may re-download."
+        }
+    } catch {
+        Write-Host "!! hf_cache aux pre-download skipped: $($_.Exception.Message)"
+    } finally {
+        Remove-Item $auxPy -Force -ErrorAction SilentlyContinue
+        Remove-Item Env:INDEXTTS_CKPT_DIR -ErrorAction SilentlyContinue
+        Remove-Item Env:INDEXTTS_INSTALL_DIR -ErrorAction SilentlyContinue
+    }
 }
 
 # Point config at the real install dir (runtime config for packaged; project config for dev)

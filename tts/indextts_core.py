@@ -171,6 +171,143 @@ def _qwen_emo_dir(model_dir: Path) -> Path:
     return (model_dir / "qwen0.6bemo4-merge").resolve()
 
 
+def _hf_weight_ready(dir_path: Path, *, min_bytes: int = 1_000_000) -> bool:
+    """True when a transformers model dir has real weight files (not just config)."""
+    if not dir_path.is_dir():
+        return False
+    for name in ("model.safetensors", "pytorch_model.bin", "model.safetensors.index.json"):
+        p = dir_path / name
+        if not p.is_file():
+            continue
+        if name.endswith(".json"):
+            if any(dir_path.glob("*.safetensors")):
+                return True
+            continue
+        if p.stat().st_size >= min_bytes:
+            return True
+    for p in dir_path.glob("*.safetensors"):
+        if p.stat().st_size >= min_bytes:
+            return True
+    for p in dir_path.glob("pytorch_model*.bin"):
+        if p.stat().st_size >= min_bytes:
+            return True
+    return False
+
+
+def missing_hf_cache_aux(model_dir: Path) -> list[str]:
+    """Aux models under checkpoints/hf_cache (required at IndexTTS2 load time)."""
+    cache = model_dir / "hf_cache"
+    missing: list[str] = []
+    if not _hf_weight_ready(cache / "w2v-bert-2.0", min_bytes=50_000_000):
+        missing.append("hf_cache/w2v-bert-2.0（语音特征，约 1GB+；空壳目录会导致合成失败）")
+    sc = cache / "semantic_codec_model.safetensors"
+    if not sc.is_file() or sc.stat().st_size < 1_000_000:
+        missing.append("hf_cache/semantic_codec_model.safetensors")
+    camp = cache / "campplus_cn_common.bin"
+    if not camp.is_file() or camp.stat().st_size < 10_000:
+        missing.append("hf_cache/campplus_cn_common.bin")
+    big = cache / "bigvgan"
+    if not (big / "config.json").is_file() or not (big / "bigvgan_generator.pt").is_file():
+        missing.append("hf_cache/bigvgan（vocoder）")
+    return missing
+
+
+def hf_cache_aux_ready(model_dir: Path) -> bool:
+    return not missing_hf_cache_aux(model_dir)
+
+
+def _download_w2v_bert(w2v_dir: Path) -> None:
+    """Download facebook/w2v-bert-2.0 into flat hf_cache/w2v-bert-2.0."""
+    import shutil
+
+    _hf_mirror_env()
+    if w2v_dir.exists():
+        shutil.rmtree(w2v_dir, ignore_errors=True)
+    w2v_dir.mkdir(parents=True, exist_ok=True)
+    last_err = ""
+    try:
+        from modelscope import snapshot_download
+
+        snapshot_download("AI-ModelScope/w2v-bert-2.0", local_dir=str(w2v_dir))
+        if _hf_weight_ready(w2v_dir, min_bytes=50_000_000):
+            return
+        last_err = "modelscope: downloaded but weights missing"
+    except Exception as exc:
+        last_err = f"modelscope: {exc}"
+    try:
+        from huggingface_hub import snapshot_download as hf_snap
+
+        hf_snap(
+            "facebook/w2v-bert-2.0",
+            local_dir=str(w2v_dir),
+            local_dir_use_symlinks=False,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"下载 w2v-bert-2.0 失败（{last_err}; hf: {exc}）\n"
+            f"目标: {w2v_dir}\n"
+            "请保持网络畅通或使用 hf-mirror / ModelScope 后重试。"
+        ) from exc
+    if not _hf_weight_ready(w2v_dir, min_bytes=50_000_000):
+        raise FileNotFoundError(
+            f"w2v-bert-2.0 下载后仍缺权重文件: {w2v_dir}\n"
+            "需要 model.safetensors 或 pytorch_model.bin。"
+        )
+
+
+def ensure_hf_cache_aux(model_dir: Path) -> None:
+    """
+    Ensure checkpoints/hf_cache aux models are complete.
+
+    IndexTTS ensure_models_available() only checks that w2v-bert dir is non-empty,
+    so a failed partial download leaves a broken cache that never retries.
+    """
+    import shutil
+
+    _hf_mirror_env()
+    cache = model_dir / "hf_cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    w2v = cache / "w2v-bert-2.0"
+    if w2v.exists() and not _hf_weight_ready(w2v, min_bytes=50_000_000):
+        shutil.rmtree(w2v, ignore_errors=True)
+
+    # Prefer upstream helper (also pulls semantic_codec / campplus / bigvgan).
+    try:
+        from indextts.utils.model_download import ensure_models_available
+
+        ensure_models_available(str(model_dir))
+    except Exception:
+        pass
+
+    if not _hf_weight_ready(w2v, min_bytes=50_000_000):
+        _download_w2v_bert(w2v)
+
+    # If upstream skipped because empty-ish, force remaining single-file downloads.
+    still = missing_hf_cache_aux(model_dir)
+    if still and any("w2v" not in s for s in still):
+        try:
+            from indextts.utils.model_download import ensure_models_available
+
+            # Drop incomplete bigvgan dir so helper re-fetches
+            big = cache / "bigvgan"
+            if big.is_dir() and (
+                not (big / "config.json").is_file() or not (big / "bigvgan_generator.pt").is_file()
+            ):
+                shutil.rmtree(big, ignore_errors=True)
+            ensure_models_available(str(model_dir))
+        except Exception:
+            pass
+
+    still = missing_hf_cache_aux(model_dir)
+    if still:
+        raise FileNotFoundError(
+            "IndexTTS2 辅助模型（hf_cache）不完整：\n"
+            + "\n".join(f"· {m}" for m in still)
+            + f"\n目录: {cache}\n"
+            "请到「设置 → 本机环境」重装 IndexTTS2，并保持网络畅通（首次会下 w2v-bert 约 1GB+）。"
+        )
+
+
 def qwen_emo_ready(model_dir: Path) -> bool:
     emo = _qwen_emo_dir(model_dir)
     cfg_ok = (emo / "config.json").is_file()
@@ -219,6 +356,7 @@ def prepare_indextts_cfg(cfg_path: Path, model_dir: Path) -> Path:
     """Ensure weights + write runtime config with absolute POSIX qwen_emo_path."""
     ensure_core_checkpoints(model_dir)
     emo = ensure_qwen_emo_model(model_dir)
+    ensure_hf_cache_aux(model_dir)
     try:
         from omegaconf import OmegaConf
 
@@ -276,13 +414,28 @@ def create_index_tts2(cfg: dict):
     it_cfg = cfg.get("indextts", {})
     cfg_path, model_dir = model_paths(cfg)
     patched = prepare_indextts_cfg(cfg_path, model_dir)
-    return IndexTTS2(
+    aux_paths = None
+    try:
+        from indextts.utils.model_download import ensure_models_available
+
+        aux_paths = ensure_models_available(str(model_dir.resolve()))
+    except Exception:
+        aux_paths = None
+    kwargs = dict(
         cfg_path=str(patched.resolve()),
         model_dir=str(model_dir.resolve()),
         use_fp16=bool(it_cfg.get("use_fp16", True)),
         use_cuda_kernel=bool(it_cfg.get("use_cuda_kernel", False)),
         use_deepspeed=False,
     )
+    if aux_paths is not None:
+        kwargs["aux_paths"] = aux_paths
+    try:
+        return IndexTTS2(**kwargs)
+    except TypeError:
+        # Older IndexTTS without aux_paths kwarg
+        kwargs.pop("aux_paths", None)
+        return IndexTTS2(**kwargs)
 
 
 def _wav_duration_sec(path: Path) -> float:

@@ -29,7 +29,7 @@ MIN_VRAM_GB: dict[str, float] = {
 
 # Approximate download / install footprint (GB) for UI — not exact disk usage.
 PACKAGE_SIZE_GB: dict[str, float] = {
-    "indextts": 6.5,
+    "indextts": 8.0,
     "cosyvoice": 5.0,
     "qwen3_local": 3.5,
     "piper": 0.3,
@@ -62,7 +62,13 @@ def _first_existing(*paths: Path) -> Path | None:
 
 def _indextts_status(cfg: dict) -> dict:
     from tts.engine import resolve_indextts_install_dir
-    from tts.indextts_core import core_checkpoints_ready, missing_core_checkpoints, qwen_emo_ready
+    from tts.indextts_core import (
+        core_checkpoints_ready,
+        hf_cache_aux_ready,
+        missing_core_checkpoints,
+        missing_hf_cache_aux,
+        qwen_emo_ready,
+    )
 
     install = resolve_indextts_install_dir(cfg)
     it = cfg.get("indextts") or {}
@@ -84,6 +90,9 @@ def _indextts_status(cfg: dict) -> dict:
             missing.append(
                 "情感模型 qwen0.6bemo4-merge 不完整（约 1.2GB，请重装 IndexTTS2）"
             )
+        else:
+            for m in missing_hf_cache_aux(model_dir):
+                missing.append(m)
     ref = find_indextts_reference(cfg)
     preset_missing: list[str] = []
     if not ref:
@@ -97,6 +106,7 @@ def _indextts_status(cfg: dict) -> dict:
         and (model_dir / "config.yaml").is_file()
         and core_checkpoints_ready(model_dir)
         and qwen_emo_ready(model_dir)
+        and hf_cache_aux_ready(model_dir)
     )
     ready = installed
     preset_ready = installed and ref is not None

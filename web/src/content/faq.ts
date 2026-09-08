@@ -92,6 +92,13 @@ export const FAQ_ITEMS: FaqItem[] = [
       + '请升到 0.1.40+：未就绪会记为失败并可「重新排队」；本机环境卡片始终有「重装 / 修复」，缺项旁可「修复此项」。装完点「重新检测」确认源码与权重都在。',
   },
   {
+    id: 'indextts-w2v-bert',
+    q: '配音报 w2v-bert-2.0 / no file named model.safetensors？',
+    a:
+      '辅助模型 hf_cache\\w2v-bert-2.0 下过一半（目录在但缺权重）。旧版 IndexTTS 只看「目录非空」就不会再下。\n'
+      + '处理：① 升到 0.1.41+ 后再合成（会删空壳并重下，约 1GB+）；② 或设置 → 本机环境 → IndexTTS2「重装 / 修复」；③ 保持网络畅通（ModelScope / hf-mirror）。',
+  },
+  {
     id: 'whisper-hub-timeout',
     q: '混剪一键提取字幕报 ConnectTimeout / LocalEntryNotFoundError？',
     a:
