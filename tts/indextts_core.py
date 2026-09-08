@@ -255,12 +255,96 @@ def _download_w2v_bert(w2v_dir: Path) -> None:
         )
 
 
+def _download_hf_file(repo_id: str, filename: str, dest: Path) -> None:
+    """Download one HF file (hub SDK → hf-mirror HTTP)."""
+    import shutil
+    import urllib.request
+
+    _hf_mirror_env()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.is_file() and dest.stat().st_size > 1000:
+        return
+    try:
+        from huggingface_hub import hf_hub_download
+
+        path = hf_hub_download(
+            repo_id=repo_id,
+            filename=filename,
+            local_dir=str(dest.parent),
+            local_dir_use_symlinks=False,
+        )
+        p = Path(path)
+        nested = dest.parent / filename
+        if nested.is_file() and nested.resolve() != dest.resolve():
+            shutil.copy2(nested, dest)
+        elif p.is_file() and p.resolve() != dest.resolve():
+            shutil.copy2(p, dest)
+        if dest.is_file() and dest.stat().st_size > 1000:
+            return
+    except Exception:
+        pass
+    url = f"https://hf-mirror.com/{repo_id}/resolve/main/{filename}"
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    with urllib.request.urlopen(url, timeout=600) as resp, open(tmp, "wb") as out:
+        shutil.copyfileobj(resp, out)
+    tmp.replace(dest)
+    if not dest.is_file() or dest.stat().st_size < 1000:
+        raise RuntimeError(f"下载失败: {repo_id}/{filename}")
+
+
+def _download_hf_cache_standalone(model_dir: Path) -> None:
+    """Full aux download without indextts.utils.model_download (old Gitee mirrors)."""
+    import shutil
+
+    cache = model_dir / "hf_cache"
+    cache.mkdir(parents=True, exist_ok=True)
+    w2v = cache / "w2v-bert-2.0"
+    if not _hf_weight_ready(w2v, min_bytes=50_000_000):
+        _download_w2v_bert(w2v)
+
+    sc = cache / "semantic_codec_model.safetensors"
+    if not sc.is_file() or sc.stat().st_size < 1_000_000:
+        nested = cache / "semantic_codec" / "model.safetensors"
+        try:
+            _download_hf_file("amphion/MaskGCT", "semantic_codec/model.safetensors", nested)
+            if nested.is_file():
+                shutil.copy2(nested, sc)
+        except Exception:
+            _download_hf_file("amphion/MaskGCT", "semantic_codec/model.safetensors", sc)
+
+    camp = cache / "campplus_cn_common.bin"
+    if not camp.is_file() or camp.stat().st_size < 10_000:
+        try:
+            from modelscope.hub.file_download import model_file_download
+
+            p = model_file_download(
+                model_id="iic/speech_campplus_sv_zh-cn_16k-common",
+                file_path="campplus_cn_common.bin",
+                local_dir=str(cache),
+            )
+            if p and Path(p).is_file() and Path(p).resolve() != camp.resolve():
+                shutil.copy2(p, camp)
+        except Exception:
+            pass
+        if not camp.is_file() or camp.stat().st_size < 10_000:
+            _download_hf_file("funasr/campplus", "campplus_cn_common.bin", camp)
+
+    big = cache / "bigvgan"
+    big.mkdir(parents=True, exist_ok=True)
+    for name in ("config.json", "bigvgan_generator.pt"):
+        dest = big / name
+        if dest.is_file() and dest.stat().st_size > 100:
+            continue
+        _download_hf_file("nvidia/bigvgan_v2_22khz_80band_256x", name, dest)
+
+
 def ensure_hf_cache_aux(model_dir: Path) -> None:
     """
     Ensure checkpoints/hf_cache aux models are complete.
 
     IndexTTS ensure_models_available() only checks that w2v-bert dir is non-empty,
     so a failed partial download leaves a broken cache that never retries.
+    Older Gitee mirrors may lack indextts.utils.model_download entirely.
     """
     import shutil
 
@@ -271,7 +355,6 @@ def ensure_hf_cache_aux(model_dir: Path) -> None:
     if w2v.exists() and not _hf_weight_ready(w2v, min_bytes=50_000_000):
         shutil.rmtree(w2v, ignore_errors=True)
 
-    # Prefer upstream helper (also pulls semantic_codec / campplus / bigvgan).
     try:
         from indextts.utils.model_download import ensure_models_available
 
@@ -279,24 +362,18 @@ def ensure_hf_cache_aux(model_dir: Path) -> None:
     except Exception:
         pass
 
-    if not _hf_weight_ready(w2v, min_bytes=50_000_000):
-        _download_w2v_bert(w2v)
-
-    # If upstream skipped because empty-ish, force remaining single-file downloads.
-    still = missing_hf_cache_aux(model_dir)
-    if still and any("w2v" not in s for s in still):
+    if missing_hf_cache_aux(model_dir):
         try:
-            from indextts.utils.model_download import ensure_models_available
-
-            # Drop incomplete bigvgan dir so helper re-fetches
-            big = cache / "bigvgan"
-            if big.is_dir() and (
-                not (big / "config.json").is_file() or not (big / "bigvgan_generator.pt").is_file()
-            ):
-                shutil.rmtree(big, ignore_errors=True)
-            ensure_models_available(str(model_dir))
-        except Exception:
-            pass
+            _download_hf_cache_standalone(model_dir)
+        except Exception as exc:
+            still = missing_hf_cache_aux(model_dir)
+            raise FileNotFoundError(
+                "IndexTTS2 辅助模型（hf_cache）不完整：\n"
+                + "\n".join(f"· {m}" for m in still)
+                + f"\n目录: {cache}\n"
+                "请到「设置 → 本机环境」重装 IndexTTS2，并保持网络畅通（首次会下 w2v-bert 约 1GB+）。\n"
+                f"详情: {exc}"
+            ) from exc
 
     still = missing_hf_cache_aux(model_dir)
     if still:

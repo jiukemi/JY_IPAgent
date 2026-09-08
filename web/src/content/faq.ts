@@ -96,7 +96,13 @@ export const FAQ_ITEMS: FaqItem[] = [
     q: '配音报 w2v-bert-2.0 / no file named model.safetensors？',
     a:
       '辅助模型 hf_cache\\w2v-bert-2.0 下过一半（目录在但缺权重）。旧版 IndexTTS 只看「目录非空」就不会再下。\n'
-      + '处理：① 升到 0.1.41+ 后再合成（会删空壳并重下，约 1GB+）；② 或设置 → 本机环境 → IndexTTS2「重装 / 修复」；③ 保持网络畅通（ModelScope / hf-mirror）。',
+      + '处理：① 升到 0.1.42+ 后再合成/重装（不依赖旧源码里的 model_download，会独立下齐辅助模型）；② 设置 → 本机环境 → IndexTTS2「重装 / 修复」；③ 保持网络畅通（ModelScope / hf-mirror）。',
+  },
+  {
+    id: 'indextts-old-tree',
+    q: '重装 IndexTTS 报 No module named indextts.utils.model_download / examples_downloader？',
+    a:
+      '国内镜像拉到的 IndexTTS 源码偏旧，缺新版工具模块。0.1.42+ 已改为独立下载 hf_cache，不再依赖这些模块；请升级后「重装 / 修复」IndexTTS2。',
   },
   {
     id: 'whisper-hub-timeout',
